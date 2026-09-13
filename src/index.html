@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="fr" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+<title>Tmoney</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- Verrouillage -->
+<div class="full" id="lockScreen" hidden>
+  <div class="panel" style="text-align:center;width:min(400px,100%)">
+    <div data-logo class="logo" style="margin:0 auto"></div>
+    <h1>Tmoney</h1>
+    <p>Code PIN</p>
+    <form id="unlockForm">
+      <input id="unlockPin" class="pin" type="password" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="••••">
+      <div class="err" id="unlockErr"></div>
+      <button class="btn pri" style="width:100%;justify-content:center;margin-top:8px">Déverrouiller</button>
+    </form>
+    <button class="btn ghost sm" id="forgotPin" style="margin-top:14px">Code PIN oublié</button>
+  </div>
+</div>
+
+<!-- Bienvenue -->
+<div class="full" id="welcome" hidden>
+  <div class="panel wide" id="welcomePanel"></div>
+</div>
+
+<!-- Application -->
+<div id="app" hidden>
+  <aside>
+    <div class="brand"><span data-logo></span>Tmoney<small>ALPHA</small></div>
+    <nav id="nav">
+      <button data-page="dashboard" class="on"><span data-i="dashboard"></span>Tableau de bord</button>
+      <button data-page="transactions"><span data-i="list"></span>Transactions</button>
+      <button data-page="subs"><span data-i="repeat"></span>Mensualités</button>
+      <button data-page="cats"><span data-i="tag"></span>Catégories</button>
+      <button data-page="goals"><span data-i="target"></span>Objectifs d'épargne</button>
+      <button data-page="settings"><span data-i="settings"></span>Réglages</button>
+    </nav>
+    <div class="aside-foot">
+      <nav>
+        <button id="discreetToggle"></button>
+        <button id="themeToggle"></button>
+        <button id="lockBtn"><span data-i="lock"></span>Verrouiller</button>
+      </nav>
+    </div>
+  </aside>
+
+  <div class="content" id="content">
+    <div class="topbar">
+      <h2 id="pageTitle">Tableau de bord</h2>
+      <div class="period" id="periodBar">
+        <div class="seg" id="periodKind">
+          <button data-v="week">Semaine</button><button data-v="month">Mois</button><button data-v="year">Année</button><button data-v="custom">Dates</button>
+        </div>
+        <div class="monthnav">
+          <button class="icon-btn" id="prevPeriod" title="Période précédente"><span data-i="chevL"></span></button>
+          <b id="periodLabel"></b>
+          <span id="customRange" class="custom-range" hidden><input type="date" id="cStart"><span class="mut">au</span><input type="date" id="cEnd"></span>
+          <button class="icon-btn" id="nextPeriod" title="Période suivante"><span data-i="chevR"></span></button>
+        </div>
+        <button class="btn sm" id="todayBtn">Aujourd'hui</button>
+      </div>
+      <button class="btn" id="editLayout"><span data-i="layout"></span>Personnaliser</button>
+      <button class="btn pri" id="quickAdd"><span data-i="plus"></span>Nouvelle transaction</button>
+    </div>
+
+    <!-- Tableau de bord -->
+    <section class="page" id="page-dashboard">
+      <div class="edit-banner" id="editBanner" hidden>
+        <span>Mode personnalisation : glisser un bloc pour le déplacer, cliquer sur l'œil pour l'afficher ou le masquer.</span>
+        <span style="flex:1"></span>
+        <button class="btn sm" id="resetLayout">Réinitialiser</button>
+        <button class="btn sm pri" id="doneLayout">Terminé</button>
+      </div>
+      <div class="dash-grid" id="dashGrid"></div>
+    </section>
+
+    <!-- Transactions -->
+    <section class="page" id="page-transactions" hidden>
+      <div class="card">
+        <div class="toolbar">
+          <div class="seg" id="txFilterType"><button data-v="all" class="on">Tout</button><button data-v="in">Entrées</button><button data-v="out">Sorties</button></div>
+          <input class="grow" id="txSearch" placeholder="Rechercher (description, notes, catégorie, montant)">
+          <select id="txScope"><option value="period">Période affichée</option><option value="all">Tout l'historique</option></select>
+          <select id="txFilterCat"></select>
+          <div class="totals" id="txTotals"></div>
+        </div>
+        <div class="table-wrap"><table id="txTable"></table></div>
+      </div>
+    </section>
+
+    <!-- Mensualités -->
+    <section class="page" id="page-subs" hidden>
+      <div class="grid g4" id="subKpis"></div>
+      <div class="card" style="margin-top:16px">
+        <h3>Sorties mensuelles</h3>
+        <div class="table-wrap"><table id="subOutTable"></table></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h3>Entrées mensuelles</h3>
+        <div class="table-wrap"><table id="subInTable"></table></div>
+      </div>
+    </section>
+
+    <!-- Catégories -->
+    <section class="page" id="page-cats" hidden>
+      <div class="section-title" style="margin-top:0">Sorties</div>
+      <div class="grid g3" id="catsOut"></div>
+      <div class="section-title">Entrées</div>
+      <div class="grid g3" id="catsIn"></div>
+    </section>
+
+    <!-- Objectifs -->
+    <section class="page" id="page-goals" hidden>
+      <div class="grid g4" id="goalKpis"></div>
+      <div class="grid g3" id="goalsGrid" style="margin-top:16px"></div>
+    </section>
+
+    <!-- Réglages -->
+    <section class="page" id="page-settings" hidden>
+      <div class="grid g2">
+        <div class="card">
+          <h3>Affichage et sécurité</h3>
+          <div class="set-row"><div>Thème</div><div class="seg" id="setTheme"><button data-v="light">Clair</button><button data-v="dark">Sombre</button></div></div>
+          <div class="set-row"><div>Mode discret<small>Masque tous les montants</small></div><div class="seg" id="setDiscreet"><button data-v="off">Désactivé</button><button data-v="on">Activé</button></div></div>
+          <div class="set-row"><div>Code PIN<small>Clé de chiffrement des données</small></div><button class="btn" id="changePinBtn">Modifier</button></div>
+          <div class="set-row"><div>Verrouillage</div><button class="btn" id="lockBtn2">Verrouiller</button></div>
+        </div>
+        <div class="card">
+          <h3>Export</h3>
+          <div class="set-row"><div>Période</div>
+            <select id="expPeriod" style="width:auto"><option value="range">Période affichée</option><option value="all">Tout l'historique</option></select></div>
+          <div class="set-row"><div>Excel (.xlsx)<small>Résumé, catégories, transactions, mensualités, objectifs</small></div><button class="btn" id="expXlsx"><span data-i="download"></span>Exporter</button></div>
+          <div class="set-row"><div>Rapport PDF<small>Période affichée, avec graphiques</small></div><button class="btn" id="expPdf"><span data-i="download"></span>Exporter</button></div>
+        </div>
+      </div>
+      <p class="mut" style="margin-top:20px;font-size:12px">Tmoney 0.2.0 alpha</p>
+    </section>
+  </div>
+</div>
+
+<script src="../node_modules/chart.js/dist/chart.umd.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
