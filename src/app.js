@@ -81,12 +81,31 @@ function toast(msg) {
 }
 
 // ================= Données =================
-const emptyData = () => ({ version: 3, settings: { theme: 'dark', discreet: false, serial: false, layout: null, opening: { amount: 0, date: '' } }, cats: [], tx: [], subs: [], goals: [] });
+const emptyData = () => ({ version: 4, settings: { theme: 'dark', discreet: false, serial: false, layout: null, opening: { amount: 0, date: '' }, u: 0 }, cats: [], tx: [], subs: [], goals: [], tomb: {}, dirty: {}, sync: null });
+// Horodate un enregistrement : sert à départager les modifications entre PC (le plus récent gagne)
+const SYNC_ARRAYS = { tx: 'tx', cat: 'cats', sub: 'subs', goal: 'goals' };
+const markDirty = id => { if (D.dirty) D.dirty[id] = 1; };
+// Toujours strictement postérieur à la version connue : une modification locale gagne même si
+// l'horloge de l'autre PC avance.
+const nextU = prev => Math.max(Date.now(), (prev || 0) + 1);
+const stamp = o => { if (o) { o.u = nextU(o.u); markDirty(o.id); } return o; };
+const stampSettings = () => { D.settings.u = nextU(D.settings.u); markDirty('settings'); };
+const markDeleted = (id, kind) => {
+  const prev = Object.values(SYNC_ARRAYS).map(k => D[k].find(o => o.id === id)).find(Boolean);
+  D.tomb[id] = { u: nextU(prev?.u), kind };
+  markDirty(id);
+};
 const CAT_TYPES = { out: 'Sortie', in: 'Entrée', both: 'Les deux' };
 
 // Compatibilité avec les versions précédentes des données
 function migrate(d) {
   d.settings.opening = d.settings.opening || { amount: 0, date: '' };
+  d.tomb = d.tomb || {};
+  d.dirty = d.dirty || {};
+  if (!('sync' in d)) d.sync = null;
+  const now = Date.now();
+  for (const arr of [d.tx, d.cats, d.subs, d.goals]) for (const o of arr || []) if (!o.u) o.u = now;
+  if (!d.settings.u) d.settings.u = now;
   for (const s of d.subs || []) {
     if (!s.versions || !s.versions.length) s.versions = [{ from: s.start, amount: s.amount, cat: s.cat, tag: s.tag, day: s.day, name: s.name, notes: s.notes || '', type: s.type }];
     s.versions.sort((a, b) => a.from.localeCompare(b.from));
@@ -97,8 +116,9 @@ function migrate(d) {
 let D = emptyData();
 let page = 'dashboard';
 
-async function persist() {
+async function persist(noSync) {
   try { await api.save(D); } catch (e) { toast('Erreur de sauvegarde : ' + e.message); }
+  if (!noSync && D.sync?.email) scheduleSync();
 }
 const cat = id => D.cats.find(c => c.id === id);
 const catsOf = type => D.cats.filter(c => c.type === type || c.type === 'both').sort((a, b) => a.name.localeCompare(b.name, 'fr'));
@@ -575,7 +595,7 @@ function bindLayoutDnd() {
     const L = layout(), item = L.splice(L.findIndex(x => x.id === dragId), 1)[0];
     L.splice(L.findIndex(x => x.id === target) + (before ? 0 : 1), 0, item);
     D.settings.layout = L; dragId = null;
-    persist(); renderDashboard();
+    stampSettings(); persist(); renderDashboard();
   });
   grid.addEventListener('dragend', () => { dragId = null; clear(); });
 }
@@ -754,6 +774,7 @@ function renderGoals() {
 }
 
 function renderSettings() {
+  syncUi();
   const o = D.settings.opening || { amount: 0, date: '' };
   $('#openAmount').value = o.amount ? String(o.amount).replace('.', ',') : '';
   $('#openDate').value = o.date || '';
@@ -826,7 +847,7 @@ function txModal(existing, presetType) {
       const fill = type => { form.cat.innerHTML = catsOf(type).length ? catOptions(type, t.cat) : '<option value="">–</option>'; };
       fill(t.type);
       bindTypeSeg(form, fill);
-      if (form.serial) form.serial.onchange = () => { D.settings.serial = form.serial.checked; persist(); };
+      if (form.serial) form.serial.onchange = () => { D.settings.serial = form.serial.checked; stampSettings(); persist(); };
     },
     onSubmit: (form, errEl) => {
       const amount = parseAmount(form.amount.value);
@@ -835,8 +856,8 @@ function txModal(existing, presetType) {
       if (!form.cat.value) return NO_CAT;
       if (form.tag.value && form.tag.value === form.cat.value) return 'Étiquette identique à la catégorie.';
       const data = { type: segVal(form), amount, date: form.date.value, cat: form.cat.value, tag: form.tag.value || '', desc: form.desc.value.trim(), notes: form.notes.value.trim() };
-      if (existing) Object.assign(D.tx.find(x => x.id === existing.id), data);
-      else D.tx.push({ id: uid(), ...data });
+      if (existing) stamp(Object.assign(D.tx.find(x => x.id === existing.id), data));
+      else D.tx.push(stamp({ id: uid(), ...data }));
       if (data.date < R.start || data.date > R.end) R = R.kind === 'custom' ? makeRange('month', data.date) : makeRange(R.kind, data.date);
       persist(); render();
       if (!existing && form.serial?.checked) {
@@ -885,7 +906,7 @@ function subModal(existing) {
         const i = +b.dataset.vdel;
         if (!await confirmModal('Supprimer ce changement', `Le montant appliqué depuis ${monthLabel(existing.versions[i].from)} sera supprimé : la valeur précédente s'appliquera de nouveau.`)) return;
         existing.versions.splice(i, 1);
-        Object.assign(existing, subNow(existing));
+        stamp(Object.assign(existing, subNow(existing)));
         persist(); render();
         $$('.modal-bg').forEach(x => x.remove());
         subModal(existing);
@@ -910,9 +931,9 @@ function subModal(existing) {
         versions.sort((a, b) => a.from.localeCompare(b.from));
         versions[0].from = form.start.value;
         Object.assign(existing, { type, start: form.start.value, end: form.end.value || '', versions });
-        Object.assign(existing, subNow(existing), { type, start: form.start.value, end: form.end.value || '', versions });
+        stamp(Object.assign(existing, subNow(existing), { type, start: form.start.value, end: form.end.value || '', versions }));
       } else {
-        D.subs.push({ id: uid(), type, start: form.start.value, end: form.end.value || '', ...version, versions: [{ from: form.start.value, ...version }] });
+        D.subs.push(stamp({ id: uid(), type, start: form.start.value, end: form.end.value || '', ...version, versions: [{ from: form.start.value, ...version }] }));
       }
       persist(); render();
       toast(existing ? 'Mensualité modifiée' : 'Mensualité ajoutée');
@@ -971,8 +992,8 @@ function catModal(existing, presetType) {
         if (kind === 'pct' && value > 100) return 'Règle : pourcentage supérieur à 100.';
         rules.push({ kind, value, warn: Math.min(100, Math.max(1, warn)) });
       }
-      if (existing) Object.assign(D.cats.find(x => x.id === existing.id), { name, type, color, rules });
-      else D.cats.push({ id: uid(), name, type, color, rules });
+      if (existing) stamp(Object.assign(D.cats.find(x => x.id === existing.id), { name, type, color, rules }));
+      else D.cats.push(stamp({ id: uid(), name, type, color, rules }));
       persist(); render();
       toast(existing ? 'Catégorie modifiée' : 'Catégorie créée');
     }
@@ -997,11 +1018,11 @@ function goalModal(existing) {
       if (!form.name.value.trim()) return 'Nom manquant.';
       if (!(target > 0)) return 'Montant visé invalide.';
       const data = { name: form.name.value.trim(), target, deadline: form.deadline.value || '', color };
-      if (existing) Object.assign(D.goals.find(x => x.id === existing.id), data);
+      if (existing) stamp(Object.assign(D.goals.find(x => x.id === existing.id), data));
       else {
         const init = form.initial.value.trim() ? parseAmount(form.initial.value) : 0;
         if (!(init >= 0)) return 'Montant déjà épargné invalide.';
-        D.goals.push({ id: uid(), ...data, moves: init > 0 ? [{ id: uid(), date: todayStr(), amount: init }] : [] });
+        D.goals.push(stamp({ id: uid(), ...data, moves: init > 0 ? [{ id: uid(), date: todayStr(), amount: init }] : [] }));
       }
       persist(); render();
     }
@@ -1020,6 +1041,7 @@ function goalMoveModal(g, dir) {
       if (!(a > 0)) return 'Montant invalide.';
       if (dir < 0 && a > saved) return `Retrait maximum : ${eur(saved)}.`;
       g.moves.push({ id: uid(), date: form.date.value || todayStr(), amount: a * dir });
+      stamp(g);
       persist(); render();
     }
   });
@@ -1085,7 +1107,7 @@ async function importXlsx() {
     if (!name) return '';
     let c = D.cats.find(x => x.name.toLowerCase() === name.toLowerCase() && (x.type === type || x.type === 'both'));
     if (!c) {
-      c = { id: uid(), name, type, color: color || PALETTE[D.cats.length % PALETTE.length], rules: [] };
+      c = stamp({ id: uid(), name, type, color: color || PALETTE[D.cats.length % PALETTE.length], rules: [] });
       D.cats.push(c); n.cats++;
     }
     return c.id;
@@ -1101,7 +1123,7 @@ async function importXlsx() {
     const cat = ensureCat(r['Catégorie'], type), tag = r['Étiquette'] ? ensureCat(r['Étiquette'], type) : '';
     const desc = String(r['Description'] ?? '').trim();
     if (D.tx.some(t => t.date === d && t.type === type && Math.abs(t.amount - amount) < 0.005 && (t.desc || '') === desc && t.cat === cat)) { n.dup++; continue; }
-    D.tx.push({ id: uid(), type, amount, date: d, cat, tag, desc, notes: String(r['Notes'] ?? '').trim() });
+    D.tx.push(stamp({ id: uid(), type, amount, date: d, cat, tag, desc, notes: String(r['Notes'] ?? '').trim() }));
     n.tx++;
   }
   for (const r of sh['Mensualités'] || []) {
@@ -1110,14 +1132,14 @@ async function importXlsx() {
     if (D.subs.some(x => subNow(x).name.toLowerCase() === name.toLowerCase() && x.type === type)) { n.dup++; continue; }
     const start = month(r['Début']) || thisMonth();
     const version = { amount, cat: ensureCat(r['Catégorie'], type), tag: '', day: Math.min(31, Math.max(1, +r['Jour'] || 1)), name, notes: '', type };
-    D.subs.push({ id: uid(), type, start, end: month(r['Fin']) || '', ...version, versions: [{ from: start, ...version }] });
+    D.subs.push(stamp({ id: uid(), type, start, end: month(r['Fin']) || '', ...version, versions: [{ from: start, ...version }] }));
     n.subs++;
   }
   for (const r of sh['Objectifs'] || []) {
     const name = String(r['Objectif'] ?? '').trim(), target = num(r['Visé']);
     if (!name || !(target > 0)) continue;
     if (D.goals.some(g => g.name.toLowerCase() === name.toLowerCase())) { n.dup++; continue; }
-    D.goals.push({ id: uid(), name, target, deadline: month(r['Échéance']) || '', color: PALETTE[(D.goals.length + 2) % PALETTE.length], moves: [] });
+    D.goals.push(stamp({ id: uid(), name, target, deadline: month(r['Échéance']) || '', color: PALETTE[(D.goals.length + 2) % PALETTE.length], moves: [] }));
     n.goals++;
   }
   const moves = sh['Épargne'] || [];
@@ -1126,7 +1148,7 @@ async function importXlsx() {
     const d = date(r['Date']), amount = num(r['Montant']);
     if (!g || !d || !amount) continue;
     if (g.moves.some(mv => mv.date === d && Math.abs(mv.amount - amount) < 0.005)) { n.dup++; continue; }
-    g.moves.push({ id: uid(), date: d, amount });
+    g.moves.push({ id: uid(), date: d, amount }); stamp(g);
     n.moves++;
   }
   if (!moves.length) for (const r of sh['Objectifs'] || []) {
@@ -1213,6 +1235,191 @@ async function exportPdf() {
     const res = await api.exportPdf(html, `Tmoney-rapport-${r.start}_${r.end}.pdf`);
     if (res) toast('Rapport PDF enregistré');
   } finally { D.settings.discreet = discreet; }
+}
+
+// ================= Synchronisation =================
+let syncState = { busy: false, last: null, error: null, timer: null, pending: null };
+
+// Donne un horodatage aux enregistrements qui n'en ont pas encore (données créées avant l'activation de la synchro)
+function ensureStamps() {
+  const now = Date.now();
+  for (const key of Object.values(SYNC_ARRAYS)) for (const o of D[key]) if (!o.u) { o.u = now; markDirty(o.id); }
+  if (!D.settings.u) { D.settings.u = now; markDirty('settings'); }
+}
+
+function markEverythingDirty() {
+  ensureStamps();
+  for (const key of Object.values(SYNC_ARRAYS)) for (const o of D[key]) markDirty(o.id);
+  markDirty('settings');
+  for (const id of Object.keys(D.tomb || {})) markDirty(id);
+}
+
+function collectRecords() {
+  ensureStamps();
+  const out = [];
+  const ids = Object.keys(D.dirty || {});
+  for (const id of ids) {
+    if (id === 'settings') { out.push({ id, kind: 'settings', u: D.settings.u, deleted: false, data: { ...D.settings } }); continue; }
+    const t = D.tomb?.[id];
+    if (t) { out.push({ id, kind: t.kind, u: t.u, deleted: true, data: null }); continue; }
+    for (const [kind, key] of Object.entries(SYNC_ARRAYS)) {
+      const o = D[key].find(x => x.id === id);
+      if (o) { out.push({ id, kind, u: o.u, deleted: false, data: o }); break; }
+    }
+  }
+  return out;
+}
+
+function applyRemote(rows) {
+  let changed = 0;
+  for (const r of rows) {
+    if (r.kind === 'settings') {
+      if (r.data && (r.data.u || 0) > (D.settings.u || 0)) { D.settings = { ...D.settings, ...r.data }; changed++; }
+      continue;
+    }
+    const key = SYNC_ARRAYS[r.kind];
+    if (!key) continue;
+    const arr = D[key], i = arr.findIndex(o => o.id === r.id);
+    const localU = i >= 0 ? (arr[i].u || 0) : (D.tomb[r.id]?.u || 0);
+    if (r.u <= localU) continue;
+    if (r.deleted) {
+      if (i >= 0) arr.splice(i, 1);
+      D.tomb[r.id] = { u: r.u, kind: r.kind };
+    } else {
+      if (i >= 0) arr[i] = r.data; else arr.push(r.data);
+      delete D.tomb[r.id];
+    }
+    delete D.dirty[r.id];
+    changed++;
+  }
+  return changed;
+}
+
+function syncUi() {
+  if (page !== 'settings') return;
+  const acc = $('#syncAccount'), st = $('#syncState'), btns = $('#syncButtons'), now = $('#syncNow');
+  if (!acc) return;
+  const on = !!D.sync?.email;
+  acc.textContent = on ? D.sync.email : 'Non connecté';
+  now.hidden = !on;
+  btns.innerHTML = on
+    ? `<button class="btn" data-sync="out">Se déconnecter</button>`
+    : `<button class="btn pri" data-sync="signup">Créer un compte</button><button class="btn" data-sync="signin">Se connecter</button>`;
+  st.textContent = !on ? 'Synchronisation désactivée'
+    : syncState.busy ? 'Synchronisation en cours…'
+    : syncState.error ? `Erreur : ${syncState.error}`
+    : syncState.last ? `À jour · dernière synchro à ${new Date(syncState.last).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`
+    : 'En attente';
+}
+
+async function syncNow(silent = true) {
+  if (!D.sync?.email || syncState.busy) return;
+  syncState.busy = true; syncState.error = null; syncUi();
+  try {
+    const since = D.sync.lastPull || null;
+    const pulled = await api.syncPull(since);
+    if (!pulled.ok) throw new Error(pulled.error);
+    const changed = applyRemote(pulled.data);
+    const toPush = collectRecords();
+    if (toPush.length) {
+      const pushed = await api.syncPush(toPush);
+      if (!pushed.ok) throw new Error(pushed.error);
+      // On ne déverrouille que ce qui n'a pas rebougé pendant l'envoi
+      const after = new Map(collectRecords().map(r => [r.id, r.u]));
+      for (const r of toPush) if (!after.has(r.id) || after.get(r.id) === r.u) delete D.dirty[r.id];
+    }
+    const maxU = pulled.data.reduce((a, r) => Math.max(a, r.u), 0);
+    if (maxU) D.sync.lastPull = new Date(maxU - 60000).toISOString();
+    syncState.last = Date.now();
+    await persist();
+    if (changed) render();
+    if (!silent) toast(changed ? `Synchronisé · ${plural(changed, 'élément')} mis à jour` : 'Synchronisé');
+  } catch (e) {
+    const msg = String(e.message || e);
+    syncState.error = msg === 'offline' ? 'hors ligne' : msg;
+    if (!silent) toast('Synchronisation impossible : ' + syncState.error);
+  } finally {
+    syncState.busy = false; syncUi();
+  }
+}
+
+const scheduleSync = () => {
+  clearTimeout(syncState.pending);
+  syncState.pending = setTimeout(() => syncNow(true), 3000);
+};
+
+function startSyncLoop() {
+  clearInterval(syncState.timer);
+  syncState.timer = setInterval(() => syncNow(true), 30000);
+  window.addEventListener('focus', () => syncNow(true));
+}
+
+async function afterSignIn(res, extra) {
+  D.sync = { email: res.email, mk: res.mk, session: res.session, lastPull: null };
+  markEverythingDirty();
+  await persist();
+  await syncNow(false);
+  startSyncLoop();
+  renderSettings();
+  if (extra) extra();
+}
+
+function syncAuthModal(mode) {
+  const signup = mode === 'signup';
+  modal({
+    title: signup ? 'Créer un compte de synchronisation' : 'Connexion',
+    submit: signup ? 'Créer le compte' : 'Se connecter',
+    body: `<label class="f">Email<input name="email" type="email" autocomplete="off"></label>
+      <label class="f">Mot de passe<input name="pwd" type="password" autocomplete="off"></label>
+      ${signup ? `<label class="f">Confirmation<input name="pwd2" type="password" autocomplete="off"></label>
+        <p class="mut" style="margin:0;font-size:12px">Ce mot de passe chiffre les données envoyées : il n'est jamais transmis au serveur. Une clé de secours sera affichée après la création.</p>`
+        : `<p class="mut" style="margin:0;font-size:12px">Les données de ce PC seront fusionnées avec celles du compte.</p>
+           <button type="button" class="btn sm" data-sync="recover">Mot de passe oublié</button>`}`,
+    onSubmit: async form => {
+      const email = form.email.value.trim(), pwd = form.pwd.value;
+      if (!/^\S+@\S+\.\S+$/.test(email)) return 'Email invalide.';
+      if (pwd.length < 8) return 'Mot de passe : 8 caractères minimum.';
+      if (signup && pwd !== form.pwd2.value) return 'Les mots de passe ne correspondent pas.';
+      const res = signup ? await api.syncSignUp(email, pwd) : await api.syncSignIn(email, pwd);
+      if (!res.ok) return {
+        'offline': 'Pas de connexion internet.',
+        'confirm-email': 'Compte créé : confirmer l\'email reçu, puis se connecter.',
+        'no-vault': 'Compte sans données : créer le compte depuis le premier PC.',
+        'bad-key': 'Mot de passe incorrect pour le déchiffrement.',
+        'Invalid login credentials': 'Email ou mot de passe incorrect.',
+        'User already registered': 'Un compte existe déjà avec cet email.'
+      }[res.error] || ('Erreur : ' + res.error);
+      await afterSignIn(res.data, signup ? () => showRecoveryKey(res.data.recoveryKey) : null);
+      toast(signup ? 'Compte créé' : 'Connecté');
+    }
+  });
+}
+
+function showRecoveryKey(key) {
+  modal({
+    title: 'Clé de secours', submit: 'J\'ai noté la clé', cancel: false,
+    body: `<p style="margin:0">Seul moyen de récupérer les données en ligne en cas de mot de passe oublié. Elle ne sera plus affichée.</p>
+      <div class="pin" style="letter-spacing:2px;font-size:20px;user-select:all;background:var(--card-2);border:1px solid var(--bd);border-radius:10px;padding:14px">${esc(key)}</div>
+      <p class="mut" style="margin:0;font-size:12px">À conserver hors de ce PC : gestionnaire de mots de passe, papier, autre appareil.</p>`,
+    onSubmit: () => {}
+  });
+}
+
+function syncRecoverModal() {
+  modal({
+    title: 'Mot de passe oublié', submit: 'Récupérer',
+    body: `<p class="mut" style="margin:0;font-size:12px">Nécessite la clé de secours affichée à la création du compte, ainsi qu'un nouveau mot de passe défini depuis l'email de réinitialisation Supabase.</p>
+      <label class="f">Email<input name="email" type="email"></label>
+      <label class="f">Mot de passe actuel<input name="pwd" type="password"></label>
+      <label class="f">Clé de secours<input name="rk" placeholder="XXXX-XXXX-XXXX-..."></label>
+      <label class="f">Nouveau mot de passe (optionnel)<input name="newPwd" type="password"></label>`,
+    onSubmit: async form => {
+      const res = await api.syncRecover(form.email.value.trim(), form.pwd.value, form.rk.value.trim(), form.newPwd.value || null);
+      if (!res.ok) return res.error === 'bad-recovery' ? 'Clé de secours incorrecte.' : 'Erreur : ' + res.error;
+      await afterSignIn(res.data);
+      toast('Accès récupéré');
+    }
+  });
 }
 
 // ================= Bienvenue =================
@@ -1326,6 +1533,8 @@ async function lockApp() {
   $$('.modal-bg').forEach(m => m.remove());
   Object.values(charts).forEach(c => c.destroy());
   editing = false;
+  clearInterval(syncState.timer); clearTimeout(syncState.pending);
+  await api.syncSignOut();
   D = emptyData(); showLock();
 }
 
@@ -1346,11 +1555,12 @@ function changePinModal() {
 
 // ================= Démarrage =================
 let bound = false;
-function startApp() {
+async function startApp() {
   $('#app').hidden = false;
   R = makeRange('month', todayStr());
   if (!bound) bindEvents();
   go('dashboard');
+  if (D.sync?.session && await api.syncRestore(D.sync)) { startSyncLoop(); syncNow(true); }
 }
 
 function bindEvents() {
@@ -1374,13 +1584,13 @@ function bindEvents() {
   $('#cStart').onchange = onCustom; $('#cEnd').onchange = onCustom;
   $('#editLayout').onclick = () => setEditing(!editing);
   $('#doneLayout').onclick = () => setEditing(false);
-  $('#resetLayout').onclick = () => { D.settings.layout = defaultLayout(); persist(); renderDashboard(); };
+  $('#resetLayout').onclick = () => { D.settings.layout = defaultLayout(); stampSettings(); persist(); renderDashboard(); };
   bindLayoutDnd();
   $('#quickAdd').onclick = () => ({ subs: () => subModal(), cats: () => catModal(), goals: () => goalModal() }[page] || (() => txModal(null, txType === 'in' ? 'in' : 'out')))();
-  $('#themeToggle').onclick = () => { D.settings.theme = D.settings.theme === 'dark' ? 'light' : 'dark'; persist(); render(); };
-  $('#discreetToggle').onclick = () => { D.settings.discreet = !D.settings.discreet; persist(); render(); };
-  $$('#setTheme button').forEach(b => b.onclick = () => { D.settings.theme = b.dataset.v; persist(); render(); });
-  $$('#setDiscreet button').forEach(b => b.onclick = () => { D.settings.discreet = b.dataset.v === 'on'; persist(); render(); });
+  $('#themeToggle').onclick = () => { D.settings.theme = D.settings.theme === 'dark' ? 'light' : 'dark'; stampSettings(); persist(); render(); };
+  $('#discreetToggle').onclick = () => { D.settings.discreet = !D.settings.discreet; stampSettings(); persist(); render(); };
+  $$('#setTheme button').forEach(b => b.onclick = () => { D.settings.theme = b.dataset.v; stampSettings(); persist(); render(); });
+  $$('#setDiscreet button').forEach(b => b.onclick = () => { D.settings.discreet = b.dataset.v === 'on'; stampSettings(); persist(); render(); });
   $('#lockBtn').onclick = lockApp; $('#lockBtn2').onclick = lockApp;
   $('#changePinBtn').onclick = changePinModal;
   $('#expXlsx').onclick = exportXlsx;
@@ -1391,6 +1601,7 @@ function bindEvents() {
     const a = raw === '' ? 0 : parseAmount(raw);
     if (!isFinite(a)) { $('#openErr').textContent = 'Montant invalide.'; return; }
     D.settings.opening = { amount: a, date: $('#openDate').value || '' };
+    stampSettings();
     $('#openErr').textContent = '';
     persist(); render(); toast('Solde de départ enregistré');
   };
@@ -1415,6 +1626,20 @@ function bindEvents() {
     else if (r.dev) $('#updDetail').textContent = 'Mode développement : mises à jour inactives';
   };
   $('#updInstall').onclick = () => api.installUpdate();
+  $('#syncNow').onclick = () => syncNow(false);
+  document.addEventListener('click', async e => {
+    const b = e.target.closest('[data-sync]');
+    if (!b) return;
+    const a = b.dataset.sync;
+    if (a === 'signup' || a === 'signin') syncAuthModal(a);
+    else if (a === 'recover') { $$('.modal-bg').forEach(x => x.remove()); syncRecoverModal(); }
+    else if (a === 'out') {
+      if (!await confirmModal('Se déconnecter', 'Les données restent sur ce PC. La synchronisation sera arrêtée.', 'Se déconnecter')) return;
+      await api.syncSignOut();
+      D.sync = null; clearInterval(syncState.timer);
+      persist(); renderSettings();
+    }
+  });
   $('#txSearch').oninput = renderTransactions;
   $('#txScope').onchange = renderTransactions;
   $('#txFilterCat').onchange = renderTransactions;
@@ -1426,28 +1651,29 @@ function bindEvents() {
     const d = el.dataset;
     if (d.toggleBlock) {
       const L = layout(), b = L.find(x => x.id === d.toggleBlock); b.hidden = !b.hidden;
-      D.settings.layout = L; persist(); renderDashboard();
+      D.settings.layout = L; stampSettings(); persist(); renderDashboard();
     }
     else if (d.catDetail) { if (!editing) catDetail(d.catDetail); }
     else if (d.newCat) { e.preventDefault(); catModal(null, d.newCat); }
     else if (d.editTx) txModal(D.tx.find(t => t.id === d.editTx));
-    else if (d.delTx) { if (await confirmModal('Supprimer la transaction', 'Suppression définitive de cette transaction.')) { D.tx = D.tx.filter(t => t.id !== d.delTx); persist(); render(); } }
+    else if (d.delTx) { if (await confirmModal('Supprimer la transaction', 'Suppression définitive de cette transaction.')) { markDeleted(d.delTx, 'tx'); D.tx = D.tx.filter(t => t.id !== d.delTx); persist(); render(); } }
     else if (d.editSub) subModal(D.subs.find(s => s.id === d.editSub));
-    else if (d.delSub) { if (await confirmModal('Supprimer la mensualité', 'La mensualité sera retirée de tous les mois, y compris passés.<br><br>Pour conserver l\'historique : utiliser « Arrêter ».')) { D.subs = D.subs.filter(s => s.id !== d.delSub); persist(); render(); } }
+    else if (d.delSub) { if (await confirmModal('Supprimer la mensualité', 'La mensualité sera retirée de tous les mois, y compris passés.<br><br>Pour conserver l\'historique : utiliser « Arrêter ».')) { markDeleted(d.delSub, 'sub'); D.subs = D.subs.filter(s => s.id !== d.delSub); persist(); render(); } }
     else if (d.toggleSub) {
       // Arrêter : comptée jusqu'au mois précédent (historique conservé). Reprendre : plus de date de fin.
       const s = D.subs.find(x => x.id === d.toggleSub), m = thisMonth();
       s.end = subActiveIn(s, m) ? shiftMonth(m, -1) : '';
+      stamp(s);
       persist(); render();
     }
     else if (d.editCat) catModal(cat(d.editCat));
     else if (d.delCat) {
       const used = D.tx.filter(t => t.cat === d.delCat || t.tag === d.delCat).length + D.subs.filter(s => s.versions.some(v => v.cat === d.delCat || v.tag === d.delCat)).length;
       if (used) { modal({ title: 'Suppression impossible', body: `<p style="margin:0">« ${esc(catName(d.delCat))} » est utilisée par ${plural(used, 'élément')} (transactions ou mensualités).</p>`, submit: 'OK', cancel: false, onSubmit: () => {} }); return; }
-      if (await confirmModal('Supprimer la catégorie', `Suppression de « ${esc(catName(d.delCat))} ».`)) { D.cats = D.cats.filter(c => c.id !== d.delCat); persist(); render(); }
+      if (await confirmModal('Supprimer la catégorie', `Suppression de « ${esc(catName(d.delCat))} ».`)) { markDeleted(d.delCat, 'cat'); D.cats = D.cats.filter(c => c.id !== d.delCat); persist(); render(); }
     }
     else if (d.editGoal) goalModal(D.goals.find(g => g.id === d.editGoal));
-    else if (d.delGoal) { if (await confirmModal("Supprimer l'objectif", "Suppression de l'objectif et de son historique.")) { D.goals = D.goals.filter(g => g.id !== d.delGoal); persist(); render(); } }
+    else if (d.delGoal) { if (await confirmModal("Supprimer l'objectif", "Suppression de l'objectif et de son historique.")) { markDeleted(d.delGoal, 'goal'); D.goals = D.goals.filter(g => g.id !== d.delGoal); persist(); render(); } }
     else if (d.goalMove) goalMoveModal(D.goals.find(g => g.id === d.goalMove), +d.dir);
   });
 

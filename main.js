@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
+const sync = require('./sync');
 
 const VAULT = () => path.join(app.getPath('userData'), 'tmoney.vault');
 let win = null;
@@ -163,6 +164,21 @@ ipcMain.handle('update:check', async (_e, silent) => {
 });
 ipcMain.handle('update:install', () => { autoUpdater.quitAndInstall(); });
 ipcMain.handle('app:version', () => app.getVersion());
+
+// ---- Synchronisation ----
+const syncCall = fn => async (...args) => {
+  try { return { ok: true, data: await fn(...args) }; }
+  catch (e) { return { ok: false, error: String(e?.message || e) }; }
+};
+ipcMain.handle('sync:signup', syncCall((_e, email, pwd) => sync.signUp(email, pwd)));
+ipcMain.handle('sync:signin', syncCall((_e, email, pwd) => sync.signIn(email, pwd)));
+ipcMain.handle('sync:recover', syncCall((_e, email, pwd, rk, newPwd) => sync.recover(email, pwd, rk, newPwd)));
+ipcMain.handle('sync:restore', (_e, saved) => sync.restore(saved));
+ipcMain.handle('sync:signout', () => { sync.signOut(); return true; });
+ipcMain.handle('sync:status', () => sync.status());
+ipcMain.handle('sync:pull', syncCall((_e, since) => sync.pull(since)));
+ipcMain.handle('sync:push', syncCall((_e, records) => sync.push(records)));
+ipcMain.handle('sync:wipe', syncCall(() => sync.wipe()));
 
 // ---- Export Excel ----
 ipcMain.handle('export:xlsx', async (_e, payload) => {

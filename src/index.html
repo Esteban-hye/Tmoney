@@ -149,6 +149,12 @@
           <div class="set-row"><div>Importer un fichier Tmoney<small>Ajoute le contenu d'un export Excel, doublons ignorés</small></div><button class="btn" id="impXlsx"><span data-i="upload"></span>Importer</button></div>
         </div>
         <div class="card">
+          <h3>Synchronisation entre PC</h3>
+          <p class="mut" style="margin:0 0 14px;font-size:12px">Les données sont chiffrées sur ce PC avant l'envoi : le serveur ne peut pas les lire.</p>
+          <div class="set-row"><div>Compte<small id="syncAccount">Non connecté</small></div><div id="syncButtons" style="display:flex;gap:8px"></div></div>
+          <div class="set-row"><div>État<small id="syncState">Synchronisation désactivée</small></div><button class="btn" id="syncNow" hidden>Synchroniser</button></div>
+        </div>
+        <div class="card">
           <h3>Mises à jour</h3>
           <div class="set-row"><div>Version installée</div><b id="appVersion">–</b></div>
           <div class="set-row"><div>État<small id="updDetail">–</small></div><button class="btn" id="updCheck">Rechercher</button></div>

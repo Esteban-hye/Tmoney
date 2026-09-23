@@ -14,5 +14,14 @@ contextBridge.exposeInMainWorld('tmoney', {
   checkUpdate: silent => ipcRenderer.invoke('update:check', silent),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   onUpdate: cb => ipcRenderer.on('update:status', (_e, data) => cb(data)),
-  exportPdf: (html, filename) => ipcRenderer.invoke('export:pdf', html, filename)
+  exportPdf: (html, filename) => ipcRenderer.invoke('export:pdf', html, filename),
+  syncSignUp: (email, pwd) => ipcRenderer.invoke('sync:signup', email, pwd),
+  syncSignIn: (email, pwd) => ipcRenderer.invoke('sync:signin', email, pwd),
+  syncRecover: (email, pwd, rk, newPwd) => ipcRenderer.invoke('sync:recover', email, pwd, rk, newPwd),
+  syncRestore: saved => ipcRenderer.invoke('sync:restore', saved),
+  syncSignOut: () => ipcRenderer.invoke('sync:signout'),
+  syncStatus: () => ipcRenderer.invoke('sync:status'),
+  syncPull: since => ipcRenderer.invoke('sync:pull', since),
+  syncPush: records => ipcRenderer.invoke('sync:push', records),
+  syncWipe: () => ipcRenderer.invoke('sync:wipe')
 });
