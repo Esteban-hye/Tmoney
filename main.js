@@ -143,8 +143,10 @@ ipcMain.handle('import:xlsx', async () => {
 });
 
 // ---- Mises à jour (GitHub Releases) ----
+// electron-builder retire le champ "build" du package.json empaqueté : on se fie au fichier
+// app-update.yml qu'il dépose dans les ressources quand une cible de publication est configurée.
 const updatesConfigured = () => {
-  try { return !!require('./package.json').build?.publish; } catch { return false; }
+  try { return app.isPackaged && fs.existsSync(path.join(process.resourcesPath, 'app-update.yml')); } catch { return false; }
 };
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
