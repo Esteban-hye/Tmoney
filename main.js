@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -7,6 +7,7 @@ const { autoUpdater } = require('electron-updater');
 const sync = require('./sync');
 
 const VAULT = () => path.join(app.getPath('userData'), 'tmoney.vault');
+const DEVICE = () => path.join(app.getPath('userData'), 'device.key');
 let win = null;
 let key = null;
 let salt = null;
@@ -35,14 +36,34 @@ app.whenReady().then(() => {
 });
 app.on('window-all-closed', () => app.quit());
 
-// ---- Coffre chiffré (AES-256-GCM, clé dérivée du PIN) ----
-const derive = (pin, s) => crypto.pbkdf2Sync(String(pin), s, 300000, 32, 'sha256');
+// ---- Coffre chiffré (AES-256-GCM, clé dérivée du PIN + secret propre à la machine) ----
+// Le secret machine est protégé par Windows (DPAPI) : un coffre copié sur un autre PC
+// reste illisible, même avec le bon code PIN.
+let bound = false;
+function deviceSecret() {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return null;
+    if (fs.existsSync(DEVICE())) return safeStorage.decryptString(fs.readFileSync(DEVICE()));
+    const s = crypto.randomBytes(32).toString('base64');
+    fs.mkdirSync(path.dirname(DEVICE()), { recursive: true });
+    fs.writeFileSync(DEVICE(), safeStorage.encryptString(s));
+    return s;
+  } catch { return null; }
+}
+const pinKey = (pin, s) => crypto.pbkdf2Sync(String(pin), s, 300000, 32, 'sha256');
+function derive(pin, s, useDevice) {
+  const k = pinKey(pin, s);
+  if (!useDevice) return k;
+  const secret = deviceSecret();
+  if (!secret) throw new Error('no-device-key');
+  return crypto.createHash('sha256').update(Buffer.concat([k, Buffer.from(secret, 'base64')])).digest();
+}
 
 function writeVault(data) {
   const iv = crypto.randomBytes(12);
   const c = crypto.createCipheriv('aes-256-gcm', key, iv);
   const enc = Buffer.concat([c.update(JSON.stringify(data), 'utf8'), c.final()]);
-  const out = JSON.stringify({ v: 1, salt: salt.toString('base64'), iv: iv.toString('base64'), tag: c.getAuthTag().toString('base64'), data: enc.toString('base64') });
+  const out = JSON.stringify({ v: 2, bound, salt: salt.toString('base64'), iv: iv.toString('base64'), tag: c.getAuthTag().toString('base64'), data: enc.toString('base64') });
   fs.mkdirSync(path.dirname(VAULT()), { recursive: true });
   fs.writeFileSync(VAULT() + '.tmp', out);
   fs.renameSync(VAULT() + '.tmp', VAULT());
@@ -51,11 +72,12 @@ function writeVault(data) {
 function readVault(pin) {
   const f = JSON.parse(fs.readFileSync(VAULT(), 'utf8'));
   const s = Buffer.from(f.salt, 'base64');
-  const k = derive(pin, s);
+  if (f.bound && !fs.existsSync(DEVICE())) throw new Error('other-device');
+  const k = derive(pin, s, !!f.bound);
   const d = crypto.createDecipheriv('aes-256-gcm', k, Buffer.from(f.iv, 'base64'));
   d.setAuthTag(Buffer.from(f.tag, 'base64'));
   const txt = Buffer.concat([d.update(Buffer.from(f.data, 'base64')), d.final()]).toString('utf8');
-  return { data: JSON.parse(txt), k, s };
+  return { data: JSON.parse(txt), k, s, bound: !!f.bound };
 }
 
 ipcMain.handle('vault:exists', () => fs.existsSync(VAULT()));
@@ -63,7 +85,8 @@ ipcMain.handle('vault:exists', () => fs.existsSync(VAULT()));
 ipcMain.handle('vault:create', (_e, pin, data) => {
   if (fs.existsSync(VAULT())) throw new Error('exists');
   salt = crypto.randomBytes(16);
-  key = derive(pin, salt);
+  bound = !!deviceSecret();
+  key = derive(pin, salt, bound);
   writeVault(data);
   return true;
 });
@@ -73,9 +96,16 @@ ipcMain.handle('vault:unlock', (_e, pin) => {
   if (now < lockUntil) return { error: 'wait', seconds: Math.ceil((lockUntil - now) / 1000) };
   try {
     const r = readVault(pin);
-    key = r.k; salt = r.s; fails = 0;
+    key = r.k; salt = r.s; bound = r.bound; fails = 0;
+    // Coffre créé avant cette version : on le lie à la machine au premier déverrouillage
+    if (!bound && deviceSecret()) {
+      bound = true;
+      key = derive(pin, salt, true);
+      writeVault(r.data);
+    }
     return { data: r.data };
-  } catch {
+  } catch (e) {
+    if (e.message === 'other-device') return { error: 'other-device' };
     fails++;
     if (fails >= 5) { fails = 0; lockUntil = now + 30000; return { error: 'wait', seconds: 30 }; }
     return { error: 'pin', left: 5 - fails };
@@ -90,10 +120,10 @@ ipcMain.handle('vault:save', (_e, data) => {
 
 ipcMain.handle('vault:changePin', (_e, oldPin, newPin, data) => {
   if (!key) throw new Error('locked');
-  const check = derive(oldPin, salt);
+  const check = derive(oldPin, salt, bound);
   if (!crypto.timingSafeEqual(check, key)) return false;
   salt = crypto.randomBytes(16);
-  key = derive(newPin, salt);
+  key = derive(newPin, salt, bound);
   writeVault(data);
   return true;
 });

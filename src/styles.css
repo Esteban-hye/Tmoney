@@ -256,3 +256,7 @@ label.check input { width: auto; }
 .sync-badge.busy i { background: var(--acc); animation: pulse 1s infinite; }
 .sync-badge.err i { background: var(--out); }
 @keyframes pulse { 50% { opacity: .3; } }
+
+.toast { display: flex; align-items: center; gap: 14px; }
+.toast button { background: none; border: 0; color: var(--acc); font-weight: 600; cursor: pointer; padding: 0; }
+:root[data-theme="dark"] .toast button { color: #8bb6ff; }

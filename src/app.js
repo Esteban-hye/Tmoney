@@ -73,15 +73,22 @@ function paintIcons(root = document) {
   $$('[data-i]', root).forEach(el => { el.outerHTML = ic(el.dataset.i); });
   $$('[data-logo]', root).forEach(el => { el.innerHTML = logo(); });
 }
-function toast(msg) {
+function toast(msg, undo) {
   const t = document.createElement('div');
-  t.className = 'toast'; t.textContent = msg;
+  t.className = 'toast';
+  t.append(msg);
+  if (undo) {
+    const b = document.createElement('button');
+    b.textContent = 'Annuler';
+    b.onclick = () => { t.remove(); undo(); };
+    t.append(b);
+  }
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 2600);
+  setTimeout(() => t.remove(), undo ? 8000 : 2600);
 }
 
 // ================= Données =================
-const emptyData = () => ({ version: 4, settings: { theme: 'dark', discreet: false, serial: false, layout: null, opening: { amount: 0, date: '' }, u: 0 }, cats: [], tx: [], subs: [], goals: [], tomb: {}, dirty: {}, sync: null, server: null });
+const emptyData = () => ({ version: 4, settings: { theme: 'dark', discreet: false, serial: false, layout: null, opening: { amount: 0, date: '' }, autoLock: 0, u: 0 }, cats: [], tx: [], subs: [], goals: [], tomb: {}, dirty: {}, sync: null, server: null });
 // Horodate un enregistrement : sert à départager les modifications entre PC (le plus récent gagne)
 const SYNC_ARRAYS = { tx: 'tx', cat: 'cats', sub: 'subs', goal: 'goals' };
 const markDirty = id => { if (D.dirty) D.dirty[id] = 1; };
@@ -776,6 +783,7 @@ function renderGoals() {
 
 function renderSettings() {
   syncUi();
+  $('#autoLock').value = String(D.settings.autoLock || 0);
   const o = D.settings.opening || { amount: 0, date: '' };
   $('#openAmount').value = o.amount ? String(o.amount).replace('.', ',') : '';
   $('#openDate').value = o.date || '';
@@ -1238,6 +1246,15 @@ async function exportPdf() {
   } finally { D.settings.discreet = discreet; }
 }
 
+// ================= Verrouillage automatique =================
+let idleTimer = null;
+function resetIdle() {
+  clearTimeout(idleTimer);
+  const min = D.settings?.autoLock || 0;
+  if (!min || $('#app').hidden) return;
+  idleTimer = setTimeout(() => { if (!$('#app').hidden) lockApp(); }, min * 60000);
+}
+
 // ================= Synchronisation =================
 let syncState = { busy: false, last: null, error: null, timer: null, pending: null };
 
@@ -1639,7 +1656,9 @@ $('#unlockForm').onsubmit = async e => {
     startApp();
   } else {
     $('#unlockPin').value = '';
-    $('#unlockErr').textContent = r.error === 'wait' ? `Trop de tentatives. Réessayer dans ${r.seconds} s.` : `PIN incorrect. ${plural(r.left, 'essai')} restant${r.left > 1 ? 's' : ''}.`;
+    $('#unlockErr').textContent = r.error === 'wait' ? `Trop de tentatives. Réessayer dans ${r.seconds} s.`
+      : r.error === 'other-device' ? 'Coffre créé sur un autre ordinateur : illisible ici. Utiliser « Code PIN oublié », puis se reconnecter à la synchronisation.'
+      : `PIN incorrect. ${plural(r.left, 'essai')} restant${r.left > 1 ? 's' : ''}.`;
     $('#unlockPin').focus();
   }
 };
@@ -1676,6 +1695,7 @@ async function startApp() {
   R = makeRange('month', todayStr());
   if (!bound) bindEvents();
   go('dashboard');
+  resetIdle();
   if (D.server?.url) await api.syncSetServer(D.server);
   if (D.server?.url && D.sync?.session && await api.syncRestore(D.sync)) { startSyncLoop(); syncNow(true); }
 }
@@ -1709,6 +1729,8 @@ function bindEvents() {
   $$('#setTheme button').forEach(b => b.onclick = () => { D.settings.theme = b.dataset.v; stampSettings(); persist(); render(); });
   $$('#setDiscreet button').forEach(b => b.onclick = () => { D.settings.discreet = b.dataset.v === 'on'; stampSettings(); persist(); render(); });
   $('#lockBtn').onclick = lockApp; $('#lockBtn2').onclick = lockApp;
+  $('#autoLock').onchange = e => { D.settings.autoLock = +e.target.value; stampSettings(); persist(); resetIdle(); };
+  ['mousemove', 'keydown', 'click', 'wheel'].forEach(ev => document.addEventListener(ev, resetIdle, { passive: true }));
   $('#changePinBtn').onclick = changePinModal;
   $('#expXlsx').onclick = exportXlsx;
   $('#expPdf').onclick = exportPdf;
@@ -1760,6 +1782,34 @@ function bindEvents() {
       toast('Données en ligne effacées');
       renderSettings();
     }
+    else if (a === 'wipeall') {
+      const total = D.tx.length + D.cats.length + D.subs.length + D.goals.length;
+      let ok = false;
+      modal({
+        title: 'Tout effacer', submit: 'Tout effacer', danger: true,
+        body: `<p style="margin:0">Suppression définitive de <b>${plural(total, 'élément')}</b> : transactions, catégories, mensualités et objectifs.</p>
+          <p style="margin:0">L'effacement est envoyé ${D.sync?.email ? 'au serveur et à tous les PC connectés au compte, même éteints aujourd\'hui' : 'sur ce PC uniquement (synchronisation désactivée)'}.</p>
+          <p class="mut" style="margin:0;font-size:13px">Les réglages, le code PIN et le compte de synchronisation sont conservés.</p>
+          <label class="f">Taper EFFACER pour confirmer<input name="confirm" autocomplete="off"></label>`,
+        onSubmit: async form => {
+          if (form.confirm.value.trim().toUpperCase() !== 'EFFACER') return 'Saisir EFFACER pour confirmer.';
+          for (const [kind, key] of Object.entries(SYNC_ARRAYS)) {
+            for (const o of D[key]) markDeleted(o.id, kind);
+            D[key] = [];
+          }
+          ok = true;
+          await persist(true);
+          render();
+        }
+      });
+      const wait = setInterval(async () => {
+        if (document.querySelector('.modal-bg')) return;
+        clearInterval(wait);
+        if (!ok) return;
+        if (D.sync?.email) await syncNow(false);
+        toast('Toutes les données ont été effacées');
+      }, 300);
+    }
     else if (a === 'out') {
       if (!await confirmModal('Se déconnecter', 'Les données restent sur ce PC. La synchronisation sera arrêtée.', 'Se déconnecter')) return;
       await api.syncSignOut();
@@ -1783,9 +1833,21 @@ function bindEvents() {
     else if (d.catDetail) { if (!editing) catDetail(d.catDetail); }
     else if (d.newCat) { e.preventDefault(); catModal(null, d.newCat); }
     else if (d.editTx) txModal(D.tx.find(t => t.id === d.editTx));
-    else if (d.delTx) { if (await confirmModal('Supprimer la transaction', 'Suppression définitive de cette transaction.')) { markDeleted(d.delTx, 'tx'); D.tx = D.tx.filter(t => t.id !== d.delTx); persist(); render(); } }
+    else if (d.delTx) {
+      const item = D.tx.find(t => t.id === d.delTx);
+      if (await confirmModal('Supprimer la transaction', 'Suppression définitive de cette transaction.')) {
+        markDeleted(d.delTx, 'tx'); D.tx = D.tx.filter(t => t.id !== d.delTx); persist(); render();
+        toast('Transaction supprimée', () => { delete D.tomb[item.id]; D.tx.push(stamp(item)); persist(); render(); });
+      }
+    }
     else if (d.editSub) subModal(D.subs.find(s => s.id === d.editSub));
-    else if (d.delSub) { if (await confirmModal('Supprimer la mensualité', 'La mensualité sera retirée de tous les mois, y compris passés.<br><br>Pour conserver l\'historique : utiliser « Arrêter ».')) { markDeleted(d.delSub, 'sub'); D.subs = D.subs.filter(s => s.id !== d.delSub); persist(); render(); } }
+    else if (d.delSub) {
+      const item = D.subs.find(x => x.id === d.delSub);
+      if (await confirmModal('Supprimer la mensualité', 'La mensualité sera retirée de tous les mois, y compris passés.<br><br>Pour conserver l\'historique : utiliser « Arrêter ».')) {
+        markDeleted(d.delSub, 'sub'); D.subs = D.subs.filter(s => s.id !== d.delSub); persist(); render();
+        toast('Mensualité supprimée', () => { delete D.tomb[item.id]; D.subs.push(stamp(item)); persist(); render(); });
+      }
+    }
     else if (d.toggleSub) {
       // Arrêter : comptée jusqu'au mois précédent (historique conservé). Reprendre : plus de date de fin.
       const s = D.subs.find(x => x.id === d.toggleSub), m = thisMonth();
@@ -1800,7 +1862,13 @@ function bindEvents() {
       if (await confirmModal('Supprimer la catégorie', `Suppression de « ${esc(catName(d.delCat))} ».`)) { markDeleted(d.delCat, 'cat'); D.cats = D.cats.filter(c => c.id !== d.delCat); persist(); render(); }
     }
     else if (d.editGoal) goalModal(D.goals.find(g => g.id === d.editGoal));
-    else if (d.delGoal) { if (await confirmModal("Supprimer l'objectif", "Suppression de l'objectif et de son historique.")) { markDeleted(d.delGoal, 'goal'); D.goals = D.goals.filter(g => g.id !== d.delGoal); persist(); render(); } }
+    else if (d.delGoal) {
+      const item = D.goals.find(g => g.id === d.delGoal);
+      if (await confirmModal("Supprimer l'objectif", "Suppression de l'objectif et de son historique.")) {
+        markDeleted(d.delGoal, 'goal'); D.goals = D.goals.filter(g => g.id !== d.delGoal); persist(); render();
+        toast('Objectif supprimé', () => { delete D.tomb[item.id]; D.goals.push(stamp(item)); persist(); render(); });
+      }
+    }
     else if (d.goalMove) goalMoveModal(D.goals.find(g => g.id === d.goalMove), +d.dir);
   });
 

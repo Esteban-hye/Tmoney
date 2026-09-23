@@ -129,6 +129,8 @@
           <div class="set-row"><div>Thème</div><div class="seg" id="setTheme"><button data-v="light">Clair</button><button data-v="dark">Sombre</button></div></div>
           <div class="set-row"><div>Mode discret<small>Masque tous les montants</small></div><div class="seg" id="setDiscreet"><button data-v="off">Désactivé</button><button data-v="on">Activé</button></div></div>
           <div class="set-row"><div>Code PIN<small>Clé de chiffrement des données</small></div><button class="btn" id="changePinBtn">Modifier</button></div>
+          <div class="set-row"><div>Verrouillage automatique<small>Après une période sans activité</small></div>
+            <select id="autoLock" style="width:auto"><option value="0">Jamais</option><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 heure</option></select></div>
           <div class="set-row"><div>Verrouillage</div><button class="btn" id="lockBtn2">Verrouiller</button></div>
         </div>
         <div class="card">
@@ -156,6 +158,7 @@
           <div class="set-row"><div>Compte<small id="syncAccount">Non connecté</small></div><div id="syncButtons" style="display:flex;gap:8px"></div></div>
           <div class="set-row"><div>État<small id="syncState">Synchronisation désactivée</small></div><button class="btn" id="syncNow" hidden>Synchroniser</button></div>
           <div class="set-row" id="syncWipeRow" hidden><div>Effacer les données en ligne<small>Vide le serveur. Les données de ce PC sont conservées.</small></div><button class="btn danger" data-sync="wipe">Effacer</button></div>
+          <div class="set-row"><div>Tout effacer<small>Transactions, catégories, mensualités et objectifs, sur ce PC et sur tous les autres</small></div><button class="btn danger" data-sync="wipeall">Tout effacer</button></div>
         </div>
         <div class="card">
           <h3>Mises à jour</h3>
