@@ -131,14 +131,30 @@
           <div class="set-row"><div>Verrouillage</div><button class="btn" id="lockBtn2">Verrouiller</button></div>
         </div>
         <div class="card">
-          <h3>Export</h3>
-          <div class="set-row"><div>Période</div>
+          <h3>Solde de départ</h3>
+          <p class="mut" style="margin:0 0 14px;font-size:12px">Montant présent sur le compte avant la première transaction saisie. Compté dans le solde, exclu des entrées et des statistiques.</p>
+          <div class="row">
+            <label class="f">Montant (€)<input id="openAmount" inputmode="decimal" placeholder="0,00"></label>
+            <label class="f">À la date du<input id="openDate" type="date"></label>
+            <button class="btn pri" id="openSave">Enregistrer</button>
+          </div>
+          <div class="err" id="openErr"></div>
+        </div>
+        <div class="card">
+          <h3>Export et import</h3>
+          <div class="set-row"><div>Période<small>Pour l'export Excel</small></div>
             <select id="expPeriod" style="width:auto"><option value="range">Période affichée</option><option value="all">Tout l'historique</option></select></div>
           <div class="set-row"><div>Excel (.xlsx)<small>Résumé, catégories, transactions, mensualités, objectifs</small></div><button class="btn" id="expXlsx"><span data-i="download"></span>Exporter</button></div>
           <div class="set-row"><div>Rapport PDF<small>Période affichée, avec graphiques</small></div><button class="btn" id="expPdf"><span data-i="download"></span>Exporter</button></div>
+          <div class="set-row"><div>Importer un fichier Tmoney<small>Ajoute le contenu d'un export Excel, doublons ignorés</small></div><button class="btn" id="impXlsx"><span data-i="upload"></span>Importer</button></div>
+        </div>
+        <div class="card">
+          <h3>Mises à jour</h3>
+          <div class="set-row"><div>Version installée</div><b id="appVersion">–</b></div>
+          <div class="set-row"><div>État<small id="updDetail">–</small></div><button class="btn" id="updCheck">Rechercher</button></div>
+          <div class="set-row" id="updInstallRow" hidden><div>Nouvelle version prête<small>L'application redémarre pour l'installer</small></div><button class="btn pri" id="updInstall">Installer</button></div>
         </div>
       </div>
-      <p class="mut" style="margin-top:20px;font-size:12px">Tmoney 0.2.0 alpha</p>
     </section>
   </div>
 </div>

@@ -9,5 +9,10 @@ contextBridge.exposeInMainWorld('tmoney', {
   lock: () => ipcRenderer.invoke('vault:lock'),
   reset: () => ipcRenderer.invoke('vault:reset'),
   exportXlsx: payload => ipcRenderer.invoke('export:xlsx', payload),
+  importXlsx: () => ipcRenderer.invoke('import:xlsx'),
+  version: () => ipcRenderer.invoke('app:version'),
+  checkUpdate: silent => ipcRenderer.invoke('update:check', silent),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  onUpdate: cb => ipcRenderer.on('update:status', (_e, data) => cb(data)),
   exportPdf: (html, filename) => ipcRenderer.invoke('export:pdf', html, filename)
 });

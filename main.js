@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
+const { autoUpdater } = require('electron-updater');
 
 const VAULT = () => path.join(app.getPath('userData'), 'tmoney.vault');
 let win = null;
@@ -27,7 +28,10 @@ function createWindow() {
 app.setAppUserModelId('com.tmoney.app');
 if (!app.requestSingleInstanceLock()) app.quit();
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  if (app.isPackaged && updatesConfigured()) setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 4000);
+});
 app.on('window-all-closed', () => app.quit());
 
 // ---- Coffre chiffré (AES-256-GCM, clé dérivée du PIN) ----
@@ -107,6 +111,58 @@ ipcMain.handle('vault:reset', async () => {
   key = null; salt = null;
   return true;
 });
+
+// ---- Import Excel (export Tmoney) ----
+ipcMain.handle('import:xlsx', async () => {
+  const { filePaths, canceled } = await dialog.showOpenDialog(win, {
+    title: 'Importer un fichier Tmoney', properties: ['openFile'], filters: [{ name: 'Excel', extensions: ['xlsx'] }]
+  });
+  if (canceled || !filePaths?.length) return null;
+  const ExcelJS = require('exceljs');
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.readFile(filePaths[0]);
+  const out = {};
+  wb.eachSheet(ws => {
+    const headers = (ws.getRow(1).values || []).slice(1).map(h => String(h ?? '').trim());
+    const rows = [];
+    for (let i = 2; i <= ws.rowCount; i++) {
+      const vals = (ws.getRow(i).values || []).slice(1);
+      if (!vals.some(v => v !== null && v !== undefined && v !== '')) continue;
+      const o = {};
+      headers.forEach((h, j) => {
+        let v = vals[j];
+        if (v && typeof v === 'object') v = v.text ?? v.result ?? v.richText?.map(r => r.text).join('') ?? (v instanceof Date ? v.toISOString().slice(0, 10) : String(v));
+        o[h] = v ?? '';
+      });
+      rows.push(o);
+    }
+    out[ws.name] = rows;
+  });
+  return { file: filePaths[0], sheets: out };
+});
+
+// ---- Mises à jour (GitHub Releases) ----
+const updatesConfigured = () => {
+  try { return !!require('./package.json').build?.publish; } catch { return false; }
+};
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+const sendUpdate = (status, info) => { try { win?.webContents.send('update:status', { status, info }); } catch {} };
+autoUpdater.on('checking-for-update', () => sendUpdate('checking'));
+autoUpdater.on('update-available', i => sendUpdate('available', { version: i.version }));
+autoUpdater.on('update-not-available', () => sendUpdate('none'));
+autoUpdater.on('download-progress', p => sendUpdate('downloading', { percent: Math.round(p.percent) }));
+autoUpdater.on('update-downloaded', i => sendUpdate('downloaded', { version: i.version }));
+autoUpdater.on('error', e => sendUpdate('error', { message: String(e?.message || e) }));
+
+ipcMain.handle('update:check', async (_e, silent) => {
+  if (!updatesConfigured()) return { configured: false, version: app.getVersion() };
+  if (!app.isPackaged) return { configured: true, dev: true, version: app.getVersion() };
+  try { await autoUpdater.checkForUpdates(); } catch (e) { sendUpdate('error', { message: String(e?.message || e) }); }
+  return { configured: true, version: app.getVersion() };
+});
+ipcMain.handle('update:install', () => { autoUpdater.quitAndInstall(); });
+ipcMain.handle('app:version', () => app.getVersion());
 
 // ---- Export Excel ----
 ipcMain.handle('export:xlsx', async (_e, payload) => {

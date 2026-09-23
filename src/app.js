@@ -63,7 +63,8 @@ const ICONS = {
   piggy: '<path d="M19 5c-1.5 0-2.8 1.4-3 2-3.5-1.5-11-.3-11 5 0 1.8 0 3 2 4.5V20h4v-2h3v2h4v-4c1-.5 1.7-1 2-2h2v-4h-2c0-1-.5-1.5-1-2V5z"/><path d="M2 9v1c0 1.1.9 2 2 2h1"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
   pause: '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
-  play: '<path d="m6 3 14 9-14 9z"/>'
+  play: '<path d="m6 3 14 9-14 9z"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 8 5-5 5 5M12 3v12"/>'
 };
 const ic = (n, style = '') => `<svg class="i" viewBox="0 0 24 24" ${style ? `style="${style}"` : ''}>${ICONS[n] || ''}</svg>`;
 let logoN = 0; // dégradés à identifiant unique : un dégradé défini dans un élément masqué ne s'affiche pas ailleurs
@@ -80,7 +81,19 @@ function toast(msg) {
 }
 
 // ================= Données =================
-const emptyData = () => ({ version: 2, settings: { theme: 'dark', discreet: false, serial: false, layout: null }, cats: [], tx: [], subs: [], goals: [] });
+const emptyData = () => ({ version: 3, settings: { theme: 'dark', discreet: false, serial: false, layout: null, opening: { amount: 0, date: '' } }, cats: [], tx: [], subs: [], goals: [] });
+const CAT_TYPES = { out: 'Sortie', in: 'Entrée', both: 'Les deux' };
+
+// Compatibilité avec les versions précédentes des données
+function migrate(d) {
+  d.settings.opening = d.settings.opening || { amount: 0, date: '' };
+  for (const s of d.subs || []) {
+    if (!s.versions || !s.versions.length) s.versions = [{ from: s.start, amount: s.amount, cat: s.cat, tag: s.tag, day: s.day, name: s.name, notes: s.notes || '', type: s.type }];
+    s.versions.sort((a, b) => a.from.localeCompare(b.from));
+  }
+  d.version = 3;
+  return d;
+}
 let D = emptyData();
 let page = 'dashboard';
 
@@ -88,10 +101,21 @@ async function persist() {
   try { await api.save(D); } catch (e) { toast('Erreur de sauvegarde : ' + e.message); }
 }
 const cat = id => D.cats.find(c => c.id === id);
-const catsOf = type => D.cats.filter(c => c.type === type).sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+const catsOf = type => D.cats.filter(c => c.type === type || c.type === 'both').sort((a, b) => a.name.localeCompare(b.name, 'fr'));
 const catName = id => cat(id)?.name || 'Sans catégorie';
 const catColor = id => cat(id)?.color || '#94a3b8';
 const subActiveIn = (s, m) => s.start <= m && (!s.end || s.end >= m);
+// Valeurs applicables à un mois donné (une mensualité peut changer de montant en cours de route)
+function subVersion(s, m) {
+  let v = s.versions[0];
+  for (const x of s.versions) if (x.from <= m) v = x;
+  return v;
+}
+const subNow = s => subVersion(s, thisMonth());
+function catUsage(id) {
+  const used = type => D.tx.some(t => t.type === type && t.cat === id) || D.subs.some(s => s.type === type && s.versions.some(v => v.cat === id));
+  return { inUse: used('in'), outUse: used('out') };
+}
 const signOf = t => (t.type === 'in' ? t.amount : -t.amount);
 
 // Transactions + occurrences des mensualités entre deux dates (incluses)
@@ -101,16 +125,19 @@ function itemsIn(start, end) {
     let m = s.start > start.slice(0, 7) ? s.start : start.slice(0, 7);
     const last = s.end && s.end < end.slice(0, 7) ? s.end : end.slice(0, 7);
     for (; m <= last; m = shiftMonth(m, 1)) {
-      const date = `${m}-${pad(Math.min(s.day, daysIn(m)))}`;
+      const v = subVersion(s, m);
+      const date = `${m}-${pad(Math.min(v.day, daysIn(m)))}`;
       if (date < start || date > end) continue;
-      items.push({ id: 'sub-' + s.id + '-' + m, subId: s.id, type: s.type, amount: s.amount, cat: s.cat, tag: s.tag, date, desc: s.name, notes: s.notes || '', sub: true });
+      items.push({ id: 'sub-' + s.id + '-' + m, subId: s.id, type: v.type || s.type, amount: v.amount, cat: v.cat, tag: v.tag, date, desc: v.name, notes: v.notes || '', sub: true });
     }
   }
   return items.sort((a, b) => b.date.localeCompare(a.date) || b.amount - a.amount);
 }
 const monthItems = m => itemsIn(`${m}-01`, `${m}-${daysIn(m)}`);
 const firstDate = () => [...D.tx.map(t => t.date), ...D.subs.map(s => s.start + '-01')].sort()[0] || todayStr();
-const balanceAt = date => sumBy(itemsIn('0000-01-01', date), signOf);
+// Solde de départ : compté dans le solde, exclu des entrées et des statistiques
+const openingAt = date => { const o = D.settings.opening || {}; return o.amount && (!o.date || o.date <= date) ? o.amount : 0; };
+const balanceAt = date => openingAt(date) + sumBy(itemsIn('0000-01-01', date), signOf);
 
 // ================= Périodes =================
 function makeRange(kind, anchor) {
@@ -232,7 +259,7 @@ function renderPeriodBar() {
 function render() {
   renderPeriodBar();
   applyTheme();
-  ({ dashboard: renderDashboard, transactions: renderTransactions, subs: renderSubs, cats: renderCats, goals: renderGoals, settings: () => {} })[page]();
+  ({ dashboard: renderDashboard, transactions: renderTransactions, subs: renderSubs, cats: renderCats, goals: renderGoals, settings: renderSettings })[page]();
 }
 
 // ================= Tableau de bord : blocs =================
@@ -590,32 +617,35 @@ function renderTransactions() {
 // ================= Mensualités =================
 function renderSubs() {
   const m = thisMonth(), st = stats(makeRange('month', todayStr()));
+  const amountOf = s => subVersion(s, m).amount;
   const active = D.subs.filter(s => subActiveIn(s, m));
   const aOut = active.filter(s => s.type === 'out'), aIn = active.filter(s => s.type === 'in');
-  const outT = sumBy(aOut), inT = sumBy(aIn);
+  const outT = sumBy(aOut, amountOf), inT = sumBy(aIn, amountOf);
   $('#subKpis').innerHTML = [
     ['Sorties fixes / mois', eur(outT), plural(aOut.length, 'active'), 'out'],
     ['Sorties fixes / an', eur(outT * 12), 'projection', ''],
     ['Entrées fixes / mois', eur(inT), plural(aIn.length, 'active'), 'in'],
     ['Part des entrées', pct(st.inn ? outT / st.inn * 100 : 0), monthLabel(m), '']
-  ].map(([l, v, s, c]) => `<div class="card kpi"><div class="lbl">${l}</div><div class="val ${c}">${v}</div><div class="sub">${s}</div></div>`).join('');
+  ].map(([l, v, sub, c]) => `<div class="card kpi"><div class="lbl">${l}</div><div class="val ${c}">${v}</div><div class="sub">${sub}</div></div>`).join('');
   const table = type => {
-    const list = D.subs.filter(s => s.type === type).sort((a, b) => b.amount - a.amount);
+    const list = D.subs.filter(s => s.type === type).sort((a, b) => amountOf(b) - amountOf(a));
     if (!list.length) return `<tr><td class="empty">Aucune mensualité</td></tr>`;
-    const tot = sumBy(list.filter(s => subActiveIn(s, m)));
+    const tot = sumBy(list.filter(s => subActiveIn(s, m)), amountOf);
     return `<thead><tr><th>Nom</th><th>Catégorie</th><th>Étiquette</th><th>Jour</th><th>Statut</th><th class="r">Montant</th><th class="r">Par an</th><th class="r">Part</th><th style="width:120px"></th></tr></thead><tbody>` +
       list.map(s => {
-        const on = subActiveIn(s, m);
+        const v = subVersion(s, m), on = subActiveIn(s, m);
         const status = !on && s.start > m ? `<span class="badge grey">Début ${monthShort(s.start)}</span>`
           : on ? (s.end ? `<span class="badge">Fin ${monthShort(s.end)}</span>` : '<span class="badge">Active</span>')
           : `<span class="badge grey">Arrêtée</span>`;
+        const hist = s.versions.length > 1
+          ? `<span class="badge grey" title="${esc(s.versions.map(x => `${monthShort(x.from)} : ${eur(x.amount)}`).join(' · '))}">${plural(s.versions.length, 'montant')}</span>` : '';
         return `<tr style="${on ? '' : 'opacity:.55'}">
-          <td class="cell-desc"><b>${esc(s.name)}</b>${s.notes ? `<small>${esc(s.notes)}</small>` : ''}</td>
-          <td>${catTag(s.cat)}</td><td>${s.tag ? catTag(s.tag, true) : '<span class="mut">–</span>'}</td>
-          <td class="mut">${s.day}</td><td>${status}</td>
-          <td class="r num ${type}" style="font-weight:600">${eur(s.amount)}</td>
-          <td class="r num mut">${eur(s.amount * 12)}</td>
-          <td class="r num mut">${on && tot ? pct(s.amount / tot * 100) : '–'}</td>
+          <td class="cell-desc"><b>${esc(v.name)}</b> ${hist}${v.notes ? `<small>${esc(v.notes)}</small>` : ''}</td>
+          <td>${catTag(v.cat)}</td><td>${v.tag ? catTag(v.tag, true) : '<span class="mut">–</span>'}</td>
+          <td class="mut">${v.day}</td><td>${status}</td>
+          <td class="r num ${type}" style="font-weight:600">${eur(v.amount)}</td>
+          <td class="r num mut">${eur(v.amount * 12)}</td>
+          <td class="r num mut">${on && tot ? pct(v.amount / tot * 100) : '–'}</td>
           <td class="r">
             <button class="icon-btn" title="${on ? 'Arrêter' : 'Reprendre'}" data-toggle-sub="${s.id}">${ic(on ? 'pause' : 'play')}</button>
             <button class="icon-btn" title="Modifier" data-edit-sub="${s.id}">${ic('edit')}</button>
@@ -631,25 +661,25 @@ function renderCats() {
   const st = stats(R);
   const byCatIn = st.byCatIn, byTagAll = new Map();
   st.items.forEach(t => { if (t.tag) byTagAll.set(t.tag, (byTagAll.get(t.tag) || 0) + t.amount); });
-  const card = c => {
-    const total = (c.type === 'out' ? st.byCatOut : byCatIn).get(c.id) || 0;
-    const base = c.type === 'out' ? st.out : st.inn;
+  const card = (c, sense) => {
+    const total = (sense === 'out' ? st.byCatOut : byCatIn).get(c.id) || 0;
+    const base = sense === 'out' ? st.out : st.inn;
     const tagged = byTagAll.get(c.id) || 0;
-    const rules = c.type === 'out' ? ruleStatus(c, st) : [];
+    const rules = sense === 'out' ? ruleStatus(c, st) : [];
     return `<div class="card cat-card">
       <div class="cat-head clickable" data-cat-detail="${c.id}" title="Détail"><div class="sw" style="background:${c.color}">${esc(c.name.slice(0, 1).toUpperCase())}</div>
-        <div><div class="nm">${esc(c.name)}</div><div class="mut" style="font-size:12px">${base ? pct(total / base * 100) : '0 %'} des ${c.type === 'out' ? 'sorties' : 'entrées'}${tagged ? ` · étiquette : ${eur(tagged)}` : ''}</div></div>
-        <div class="am"><div class="num ${c.type}" style="font-weight:700">${eur(total)}</div></div>
+        <div><div class="nm">${esc(c.name)} ${c.type === 'both' ? '<span class="badge grey">Les deux</span>' : ''}</div><div class="mut" style="font-size:12px">${base ? pct(total / base * 100) : '0 %'} des ${sense === 'out' ? 'sorties' : 'entrées'}${tagged ? ` · étiquette : ${eur(tagged)}` : ''}</div></div>
+        <div class="am"><div class="num ${sense}" style="font-weight:700">${eur(total)}</div></div>
       </div>
-      ${rules.length ? rules.map(rs => `<div class="rule"><div class="top"><span>${rs.label}</span><span>${rs.detail}</span></div><div class="prog ${rs.level}"><i style="width:${Math.min(100, rs.ratio * 100)}%"></i></div></div>`).join('') : c.type === 'out' ? '<div class="mut" style="font-size:12px">Aucune règle</div>' : ''}
+      ${rules.length ? rules.map(rs => `<div class="rule"><div class="top"><span>${rs.label}</span><span>${rs.detail}</span></div><div class="prog ${rs.level}"><i style="width:${Math.min(100, rs.ratio * 100)}%"></i></div></div>`).join('') : sense === 'out' ? '<div class="mut" style="font-size:12px">Aucune règle</div>' : ''}
       <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:auto">
         <button class="btn sm" data-edit-cat="${c.id}">${ic('edit')}Modifier</button>
         <button class="btn sm danger" data-del-cat="${c.id}">${ic('trash')}</button>
       </div></div>`;
   };
   const empty = t => `<div class="card empty" style="grid-column:1/-1">Aucune catégorie. <a href="#" data-new-cat="${t}">Créer</a></div>`;
-  $('#catsOut').innerHTML = catsOf('out').map(card).join('') || empty('out');
-  $('#catsIn').innerHTML = catsOf('in').map(card).join('') || empty('in');
+  $('#catsOut').innerHTML = catsOf('out').map(c => card(c, 'out')).join('') || empty('out');
+  $('#catsIn').innerHTML = catsOf('in').map(c => card(c, 'in')).join('') || empty('in');
 }
 
 function catDetail(id) {
@@ -662,7 +692,7 @@ function catDetail(id) {
   const periodTotal = (c.type === 'out' ? st.byCatOut : st.byCatIn).get(id) || 0;
   const maxM = series.reduce((a, s, i) => (s.main > series[a].main ? i : a), 0);
   modal({
-    title: `${esc(c.name)} <span class="badge grey" style="margin-left:8px">${c.type === 'out' ? 'Sortie' : 'Entrée'}</span>`,
+    title: `${esc(c.name)} <span class="badge grey" style="margin-left:8px">${CAT_TYPES[c.type] || 'Sortie'}</span>`,
     wide: true, cancel: false, submit: 'Fermer',
     body: `<div class="grid g4">
         ${[['Période affichée', eur(periodTotal), rangeLabel(R)], ['Total 12 mois', eur(total12), `${monthShort(months[0])} – ${monthShort(endM)}`], ['Moyenne / mois', eur(total12 / 12), activeMonths ? `${plural(activeMonths, 'mois')} actifs` : '–'], ['Mois le plus élevé', series[maxM].main ? eur(series[maxM].main) : '–', series[maxM].main ? monthLabel(months[maxM]) : '–']]
@@ -723,6 +753,13 @@ function renderGoals() {
   }).join('');
 }
 
+function renderSettings() {
+  const o = D.settings.opening || { amount: 0, date: '' };
+  $('#openAmount').value = o.amount ? String(o.amount).replace('.', ',') : '';
+  $('#openDate').value = o.date || '';
+  api.version().then(v => { $('#appVersion').textContent = v; }).catch(() => {});
+}
+
 // ================= Modales =================
 const KEEP_OPEN = Symbol('keep');
 function modal({ title, body, submit = 'Enregistrer', danger = false, wide = false, cancel = true, extraFooter = '', onSubmit, onMount }) {
@@ -768,6 +805,7 @@ function bindTypeSeg(form, onChange) {
   });
 }
 const segVal = form => $('[data-type-seg] button.on', form).dataset.v;
+const catTypeSeg = type => `<div class="seg type3" data-type-seg style="align-self:flex-start">${Object.entries(CAT_TYPES).map(([v, l]) => `<button type="button" data-v="${v}" class="${type === v ? 'on' : ''}">${l}</button>`).join('')}</div>`;
 const NO_CAT = 'Aucune catégorie de ce type. Créer une catégorie dans Catégories.';
 
 function txModal(existing, presetType) {
@@ -815,7 +853,17 @@ function txModal(existing, presetType) {
 }
 
 function subModal(existing) {
-  const s = existing || { type: 'out', name: '', amount: '', cat: '', tag: '', day: 1, start: thisMonth(), end: '', notes: '' };
+  const cur = existing ? subNow(existing) : null;
+  const s = existing
+    ? { type: existing.type, name: cur.name, amount: cur.amount, cat: cur.cat, tag: cur.tag, day: cur.day, start: existing.start, end: existing.end || '', notes: cur.notes || '' }
+    : { type: 'out', name: '', amount: '', cat: '', tag: '', day: 1, start: thisMonth(), end: '', notes: '' };
+  const versionsHtml = () => !existing || existing.versions.length < 2 ? '' :
+    `<div class="f"><span>Historique des montants</span>
+      ${existing.versions.map((v, i) => `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-top:1px solid var(--bd)">
+        <span class="mut" style="width:90px">${i === 0 ? 'Depuis' : 'À partir de'}</span><b>${monthLabel(v.from)}</b>
+        <span class="num" style="margin-left:auto">${eur(v.amount)}</span>
+        ${i ? `<button type="button" class="icon-btn del" data-vdel="${i}" title="Supprimer ce changement">${ic('trash')}</button>` : ''}
+      </div>`).join('')}</div>`;
   modal({
     title: existing ? 'Modifier la mensualité' : 'Nouvelle mensualité',
     submit: existing ? 'Enregistrer' : 'Ajouter',
@@ -827,10 +875,21 @@ function subModal(existing) {
       <div class="row"><label class="f">Jour du mois<input name="day" type="number" min="1" max="31" value="${s.day}"></label>
         <label class="f">Début<input name="start" type="month" value="${s.start}"></label>
         <label class="f">Fin (optionnel)<input name="end" type="month" value="${s.end || ''}"></label></div>
-      <label class="f">Notes<textarea name="notes">${esc(s.notes || '')}</textarea></label>`,
+      ${existing ? `<label class="f">Prise d'effet des modifications<input name="effective" type="month" value="${thisMonth()}"><span style="font-size:12px">Les mois antérieurs conservent les valeurs actuelles.</span></label>` : ''}
+      <label class="f">Notes<textarea name="notes">${esc(s.notes || '')}</textarea></label>
+      ${versionsHtml()}`,
     onMount: form => {
       const fill = type => { form.cat.innerHTML = catsOf(type).length ? catOptions(type, s.cat) : '<option value="">–</option>'; };
       fill(s.type); bindTypeSeg(form, fill);
+      $$('[data-vdel]', form).forEach(b => b.onclick = async () => {
+        const i = +b.dataset.vdel;
+        if (!await confirmModal('Supprimer ce changement', `Le montant appliqué depuis ${monthLabel(existing.versions[i].from)} sera supprimé : la valeur précédente s'appliquera de nouveau.`)) return;
+        existing.versions.splice(i, 1);
+        Object.assign(existing, subNow(existing));
+        persist(); render();
+        $$('.modal-bg').forEach(x => x.remove());
+        subModal(existing);
+      });
     },
     onSubmit: form => {
       const amount = parseAmount(form.amount.value), day = +form.day.value;
@@ -841,9 +900,20 @@ function subModal(existing) {
       if (!(day >= 1 && day <= 31)) return 'Jour invalide (1 à 31).';
       if (!form.start.value) return 'Mois de début manquant.';
       if (form.end.value && form.end.value < form.start.value) return 'La fin précède le début.';
-      const data = { type: segVal(form), name: form.name.value.trim(), amount, cat: form.cat.value, tag: form.tag.value || '', day, start: form.start.value, end: form.end.value || '', notes: form.notes.value.trim() };
-      if (existing) Object.assign(D.subs.find(x => x.id === existing.id), data);
-      else D.subs.push({ id: uid(), ...data });
+      const type = segVal(form);
+      const version = { amount, cat: form.cat.value, tag: form.tag.value || '', day, name: form.name.value.trim(), notes: form.notes.value.trim(), type };
+      if (existing) {
+        const eff = form.effective.value;
+        const from = eff && eff > form.start.value ? eff : form.start.value;
+        const versions = existing.versions.filter(v => v.from !== from && v.from >= form.start.value);
+        versions.push({ from, ...version });
+        versions.sort((a, b) => a.from.localeCompare(b.from));
+        versions[0].from = form.start.value;
+        Object.assign(existing, { type, start: form.start.value, end: form.end.value || '', versions });
+        Object.assign(existing, subNow(existing), { type, start: form.start.value, end: form.end.value || '', versions });
+      } else {
+        D.subs.push({ id: uid(), type, start: form.start.value, end: form.end.value || '', ...version, versions: [{ from: form.start.value, ...version }] });
+      }
       persist(); render();
       toast(existing ? 'Mensualité modifiée' : 'Mensualité ajoutée');
     }
@@ -864,7 +934,7 @@ function catModal(existing, presetType) {
   modal({
     title: existing ? 'Modifier la catégorie' : 'Nouvelle catégorie',
     submit: existing ? 'Enregistrer' : 'Créer',
-    body: `${existing ? '' : typeSeg(c.type)}
+    body: `${catTypeSeg(c.type)}
       <label class="f">Nom<input name="name" value="${esc(c.name)}"></label>
       <div class="f" style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--mut)">Couleur
         <div class="swatches">${PALETTE.map(p => `<button type="button" data-sw="${p}" style="background:${p}" class="${p === color ? 'on' : ''}"></button>`).join('')}<input type="color" data-sw-custom value="${color}" title="Couleur personnalisée"></div></div>
@@ -881,13 +951,19 @@ function catModal(existing, presetType) {
       $('[data-add-rule]', form).onclick = () => $('[data-rules]', form).insertAdjacentHTML('beforeend', ruleRow());
       form.addEventListener('click', e => { const d = e.target.closest('[data-r-del]'); if (d) d.closest('.rule-row').remove(); });
       form.addEventListener('change', e => { if (e.target.dataset.r === 'kind') $('[data-r-lbl]', e.target.closest('.rule-row')).textContent = e.target.value === 'pct' ? 'Maximum (%)' : 'Maximum (€)'; });
-      if (!existing) bindTypeSeg(form, t => { $('.rules-edit', form).hidden = t === 'in'; });
+      bindTypeSeg(form, t => { $('.rules-edit', form).hidden = t === 'in'; });
     },
     onSubmit: form => {
       const name = form.name.value.trim();
       if (!name) return 'Nom manquant.';
-      const type = existing ? c.type : segVal(form);
-      if (D.cats.some(x => x.id !== existing?.id && x.type === type && x.name.toLowerCase() === name.toLowerCase())) return 'Catégorie déjà existante.';
+      const type = segVal(form);
+      const overlap = (a, b) => a === b || a === 'both' || b === 'both';
+      if (D.cats.some(x => x.id !== existing?.id && overlap(x.type, type) && x.name.toLowerCase() === name.toLowerCase())) return 'Catégorie déjà existante.';
+      if (existing) {
+        const u = catUsage(existing.id);
+        if (type === 'out' && u.inUse) return 'Catégorie utilisée par des entrées : choisir « Entrée » ou « Les deux ».';
+        if (type === 'in' && u.outUse) return 'Catégorie utilisée par des sorties : choisir « Sortie » ou « Les deux ».';
+      }
       const rules = [];
       if (type === 'out') for (const row of $$('.rule-row', form)) {
         const kind = $('[data-r=kind]', row).value, value = parseAmount($('[data-r=value]', row).value), warn = +$('[data-r=warn]', row).value || 80;
@@ -895,7 +971,7 @@ function catModal(existing, presetType) {
         if (kind === 'pct' && value > 100) return 'Règle : pourcentage supérieur à 100.';
         rules.push({ kind, value, warn: Math.min(100, Math.max(1, warn)) });
       }
-      if (existing) Object.assign(D.cats.find(x => x.id === existing.id), { name, color, rules });
+      if (existing) Object.assign(D.cats.find(x => x.id === existing.id), { name, type, color, rules });
       else D.cats.push({ id: uid(), name, type, color, rules });
       persist(); render();
       toast(existing ? 'Catégorie modifiée' : 'Catégorie créée');
@@ -975,12 +1051,103 @@ async function exportXlsx() {
       { name: 'Transactions', columns: [{ header: 'Date', key: 'date', width: 12 }, { header: 'Type', key: 'type', width: 10 }, { header: 'Catégorie', key: 'cat', width: 22 }, { header: 'Étiquette', key: 'tag', width: 22 }, { header: 'Description', key: 'desc', width: 30 }, { header: 'Notes', key: 'notes', width: 36 }, { header: 'Montant', key: 'amount', money: 1 }, { header: 'Mensualité', key: 'sub', width: 12 }],
         rows: items.map(t => ({ date: fmtDate(t.date), type: t.type === 'in' ? 'Entrée' : 'Sortie', cat: catName(t.cat), tag: t.tag ? catName(t.tag) : '', desc: t.desc, notes: t.notes, amount: signOf(t), sub: t.sub ? 'Oui' : '' })) },
       { name: 'Mensualités', columns: [{ header: 'Nom', key: 'name', width: 24 }, { header: 'Type', key: 'type', width: 10 }, { header: 'Catégorie', key: 'cat', width: 22 }, { header: 'Jour', key: 'day', width: 8 }, { header: 'Montant', key: 'amount', money: 1 }, { header: 'Par an', key: 'year', money: 1 }, { header: 'Début', key: 'start' }, { header: 'Fin', key: 'end' }],
-        rows: D.subs.map(s => ({ name: s.name, type: s.type === 'in' ? 'Entrée' : 'Sortie', cat: catName(s.cat), day: s.day, amount: s.amount, year: s.amount * 12, start: s.start, end: s.end || '' })) },
+        rows: D.subs.map(s => { const v = subNow(s); return { name: v.name, type: s.type === 'in' ? 'Entrée' : 'Sortie', cat: catName(v.cat), day: v.day, amount: v.amount, year: v.amount * 12, start: s.start, end: s.end || '' }; }) },
+      { name: 'Catégories', columns: [{ header: 'Nom', key: 'name', width: 24 }, { header: 'Type', key: 'type', width: 12 }, { header: 'Couleur', key: 'color', width: 12 }, { header: 'Règles', key: 'rules', width: 40 }],
+        rows: D.cats.map(c => ({ name: c.name, type: CAT_TYPES[c.type] || 'Sortie', color: c.color, rules: (c.rules || []).map(r => r.kind === 'budget' ? `Budget ${r.value} €/mois (alerte ${r.warn} %)` : `Max ${r.value} % des entrées (alerte ${r.warn} %)`).join(' | ') })) },
+      { name: 'Épargne', columns: [{ header: 'Objectif', key: 'goal', width: 24 }, { header: 'Date', key: 'date', width: 12 }, { header: 'Montant', key: 'amount', money: 1 }],
+        rows: D.goals.flatMap(g => g.moves.map(mv => ({ goal: g.name, date: fmtDate(mv.date), amount: mv.amount }))) },
       { name: 'Objectifs', columns: [{ header: 'Objectif', key: 'name', width: 24 }, { header: 'Visé', key: 'target', money: 1 }, { header: 'Épargné', key: 'saved', money: 1 }, { header: 'Progression', key: 'p', pct: 1 }, { header: 'Échéance', key: 'deadline' }],
         rows: D.goals.map(g => { const s = sumBy(g.moves); return { name: g.name, target: g.target, saved: s, p: g.target ? s / g.target : 0, deadline: g.deadline || '' }; }) }
     ]
   });
   if (res) toast('Export Excel enregistré');
+}
+
+async function importXlsx() {
+  const res = await api.importXlsx();
+  if (!res) return;
+  const sh = res.sheets || {};
+  const n = { cats: 0, tx: 0, dup: 0, subs: 0, goals: 0, moves: 0 };
+  const num = v => (typeof v === 'number' ? v : parseAmount(String(v ?? '').replace(/[^0-9,.\-]/g, '')));
+  const date = v => {
+    if (!v) return '';
+    if (v instanceof Date) return ds(v);
+    const t = String(v).trim();
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(t)) return `${t.slice(6, 10)}-${t.slice(3, 5)}-${t.slice(0, 2)}`;
+    if (/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0, 10);
+    const d = new Date(t);
+    return isNaN(d) ? '' : ds(d);
+  };
+  const month = v => { const d = date(v); return d ? d.slice(0, 7) : String(v ?? '').trim().slice(0, 7); };
+  const typeOf = v => (String(v ?? '').trim().toLowerCase().startsWith('entr') ? 'in' : 'out');
+  const ensureCat = (name, type, color) => {
+    name = String(name ?? '').trim();
+    if (!name) return '';
+    let c = D.cats.find(x => x.name.toLowerCase() === name.toLowerCase() && (x.type === type || x.type === 'both'));
+    if (!c) {
+      c = { id: uid(), name, type, color: color || PALETTE[D.cats.length % PALETTE.length], rules: [] };
+      D.cats.push(c); n.cats++;
+    }
+    return c.id;
+  };
+  for (const r of sh['Catégories'] || []) {
+    const type = { 'Sortie': 'out', 'Entrée': 'in', 'Les deux': 'both' }[String(r['Type'] ?? '').trim()] || 'out';
+    ensureCat(r['Nom'], type, String(r['Couleur'] ?? '').trim() || null);
+  }
+  for (const r of sh['Transactions'] || []) {
+    if (String(r['Mensualité'] ?? '').trim().toLowerCase() === 'oui') continue;
+    const d = date(r['Date']), amount = Math.abs(num(r['Montant'])), type = typeOf(r['Type']);
+    if (!d || !(amount > 0)) continue;
+    const cat = ensureCat(r['Catégorie'], type), tag = r['Étiquette'] ? ensureCat(r['Étiquette'], type) : '';
+    const desc = String(r['Description'] ?? '').trim();
+    if (D.tx.some(t => t.date === d && t.type === type && Math.abs(t.amount - amount) < 0.005 && (t.desc || '') === desc && t.cat === cat)) { n.dup++; continue; }
+    D.tx.push({ id: uid(), type, amount, date: d, cat, tag, desc, notes: String(r['Notes'] ?? '').trim() });
+    n.tx++;
+  }
+  for (const r of sh['Mensualités'] || []) {
+    const name = String(r['Nom'] ?? '').trim(), amount = Math.abs(num(r['Montant'])), type = typeOf(r['Type']);
+    if (!name || !(amount > 0)) continue;
+    if (D.subs.some(x => subNow(x).name.toLowerCase() === name.toLowerCase() && x.type === type)) { n.dup++; continue; }
+    const start = month(r['Début']) || thisMonth();
+    const version = { amount, cat: ensureCat(r['Catégorie'], type), tag: '', day: Math.min(31, Math.max(1, +r['Jour'] || 1)), name, notes: '', type };
+    D.subs.push({ id: uid(), type, start, end: month(r['Fin']) || '', ...version, versions: [{ from: start, ...version }] });
+    n.subs++;
+  }
+  for (const r of sh['Objectifs'] || []) {
+    const name = String(r['Objectif'] ?? '').trim(), target = num(r['Visé']);
+    if (!name || !(target > 0)) continue;
+    if (D.goals.some(g => g.name.toLowerCase() === name.toLowerCase())) { n.dup++; continue; }
+    D.goals.push({ id: uid(), name, target, deadline: month(r['Échéance']) || '', color: PALETTE[(D.goals.length + 2) % PALETTE.length], moves: [] });
+    n.goals++;
+  }
+  const moves = sh['Épargne'] || [];
+  for (const r of moves) {
+    const g = D.goals.find(x => x.name.toLowerCase() === String(r['Objectif'] ?? '').trim().toLowerCase());
+    const d = date(r['Date']), amount = num(r['Montant']);
+    if (!g || !d || !amount) continue;
+    if (g.moves.some(mv => mv.date === d && Math.abs(mv.amount - amount) < 0.005)) { n.dup++; continue; }
+    g.moves.push({ id: uid(), date: d, amount });
+    n.moves++;
+  }
+  if (!moves.length) for (const r of sh['Objectifs'] || []) {
+    const g = D.goals.find(x => x.name.toLowerCase() === String(r['Objectif'] ?? '').trim().toLowerCase());
+    const saved = num(r['Épargné']);
+    if (g && !g.moves.length && saved > 0) { g.moves.push({ id: uid(), date: todayStr(), amount: saved }); n.moves++; }
+  }
+  await persist(); render();
+  modal({
+    title: 'Import terminé', submit: 'OK', cancel: false,
+    body: `<p style="margin:0 0 12px">Fichier : <b>${esc(res.file.split(/[\\/]/).pop())}</b></p>
+      <table><tbody>
+        <tr><td>Transactions ajoutées</td><td class="r num"><b>${n.tx}</b></td></tr>
+        <tr><td>Mensualités ajoutées</td><td class="r num"><b>${n.subs}</b></td></tr>
+        <tr><td>Catégories créées</td><td class="r num"><b>${n.cats}</b></td></tr>
+        <tr><td>Objectifs ajoutés</td><td class="r num"><b>${n.goals}</b></td></tr>
+        <tr><td>Mouvements d'épargne ajoutés</td><td class="r num"><b>${n.moves}</b></td></tr>
+        <tr><td class="mut">Doublons ignorés</td><td class="r num mut">${n.dup}</td></tr>
+      </tbody></table>`,
+    onSubmit: () => {}
+  });
 }
 
 function chartImage(config, w, h) {
@@ -1144,7 +1311,7 @@ $('#unlockForm').onsubmit = async e => {
   const r = await api.unlock(pin);
   if (r.data) {
     const base = emptyData();
-    D = { ...base, ...r.data, settings: { ...base.settings, ...(r.data.settings || {}) } };
+    D = migrate({ ...base, ...r.data, settings: { ...base.settings, ...(r.data.settings || {}) } });
     $('#lockScreen').hidden = true;
     startApp();
   } else {
@@ -1218,6 +1385,36 @@ function bindEvents() {
   $('#changePinBtn').onclick = changePinModal;
   $('#expXlsx').onclick = exportXlsx;
   $('#expPdf').onclick = exportPdf;
+  $('#impXlsx').onclick = importXlsx;
+  $('#openSave').onclick = () => {
+    const raw = $('#openAmount').value.trim();
+    const a = raw === '' ? 0 : parseAmount(raw);
+    if (!isFinite(a)) { $('#openErr').textContent = 'Montant invalide.'; return; }
+    D.settings.opening = { amount: a, date: $('#openDate').value || '' };
+    $('#openErr').textContent = '';
+    persist(); render(); toast('Solde de départ enregistré');
+  };
+  const UPD = {
+    checking: () => 'Recherche en cours…',
+    none: () => 'Application à jour',
+    available: i => `Version ${i.version} disponible, téléchargement…`,
+    downloading: i => `Téléchargement : ${i.percent} %`,
+    downloaded: i => `Version ${i.version} téléchargée`,
+    error: i => `Erreur : ${i.message}`
+  };
+  api.onUpdate(({ status, info }) => {
+    const el = $('#updDetail');
+    if (el) el.textContent = (UPD[status] || (() => status))(info || {});
+    $('#updInstallRow').hidden = status !== 'downloaded';
+    if (status === 'downloaded') toast('Mise à jour prête à installer');
+  });
+  $('#updCheck').onclick = async () => {
+    $('#updDetail').textContent = 'Recherche en cours…';
+    const r = await api.checkUpdate();
+    if (!r.configured) $('#updDetail').textContent = 'Mises à jour non configurées (dépôt GitHub à renseigner)';
+    else if (r.dev) $('#updDetail').textContent = 'Mode développement : mises à jour inactives';
+  };
+  $('#updInstall').onclick = () => api.installUpdate();
   $('#txSearch').oninput = renderTransactions;
   $('#txScope').onchange = renderTransactions;
   $('#txFilterCat').onchange = renderTransactions;
@@ -1245,7 +1442,7 @@ function bindEvents() {
     }
     else if (d.editCat) catModal(cat(d.editCat));
     else if (d.delCat) {
-      const used = D.tx.filter(t => t.cat === d.delCat || t.tag === d.delCat).length + D.subs.filter(s => s.cat === d.delCat || s.tag === d.delCat).length;
+      const used = D.tx.filter(t => t.cat === d.delCat || t.tag === d.delCat).length + D.subs.filter(s => s.versions.some(v => v.cat === d.delCat || v.tag === d.delCat)).length;
       if (used) { modal({ title: 'Suppression impossible', body: `<p style="margin:0">« ${esc(catName(d.delCat))} » est utilisée par ${plural(used, 'élément')} (transactions ou mensualités).</p>`, submit: 'OK', cancel: false, onSubmit: () => {} }); return; }
       if (await confirmModal('Supprimer la catégorie', `Suppression de « ${esc(catName(d.delCat))} ».`)) { D.cats = D.cats.filter(c => c.id !== d.delCat); persist(); render(); }
     }

@@ -248,3 +248,5 @@ tbody tr:hover td { background: color-mix(in srgb, var(--card-2) 55%, transparen
 label.check { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--mut); cursor: pointer; margin-right: auto; }
 label.check input { width: auto; }
 .err.ok { color: var(--in); }
+
+.seg.type3 button.on { background: var(--acc); color: #fff; }

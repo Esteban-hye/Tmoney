@@ -1,7 +1,7 @@
 {
   "name": "tmoney",
   "productName": "Tmoney",
-  "version": "0.2.0-alpha",
+  "version": "0.3.0-alpha",
   "description": "Tmoney - gestion de budget",
   "author": "Esteban",
   "main": "main.js",
@@ -43,6 +43,7 @@
   },
   "dependencies": {
     "chart.js": "^4.5.1",
+    "electron-updater": "^6.8.9",
     "exceljs": "^4.4.0"
   },
   "devDependencies": {
