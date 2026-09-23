@@ -1392,7 +1392,20 @@ function serverWizard() {
   });
 }
 
+function syncBadge() {
+  const b = $('#syncBadge');
+  if (!b) return;
+  const on = !!D.sync?.email;
+  b.hidden = !on;
+  if (!on) return;
+  const state = syncState.busy ? 'busy' : syncState.error ? 'err' : '';
+  b.className = 'sync-badge ' + state;
+  b.innerHTML = `<i></i><span>${syncState.busy ? 'Synchronisation…' : syncState.error ? (syncState.error === 'hors ligne' ? 'Hors ligne' : 'Erreur de synchro') : 'Synchronisé'}</span>`;
+  b.title = syncState.error ? syncState.error : syncState.last ? 'Dernière synchro : ' + new Date(syncState.last).toLocaleTimeString('fr-FR') : '';
+}
+
 function syncUi() {
+  syncBadge();
   if (page !== 'settings') return;
   const acc = $('#syncAccount'), st = $('#syncState'), btns = $('#syncButtons'), now = $('#syncNow'), srv = $('#syncServer');
   if (!acc) return;
@@ -1400,6 +1413,7 @@ function syncUi() {
   srv.textContent = hasServer ? serverHost() : 'Non configuré';
   acc.textContent = on ? D.sync.email : hasServer ? 'Non connecté' : 'Configurer d\'abord le serveur';
   now.hidden = !on;
+  $('#syncWipeRow').hidden = !on;
   btns.innerHTML = on
     ? `<button class="btn" data-sync="out">Se déconnecter</button>`
     : hasServer
@@ -1737,6 +1751,15 @@ function bindEvents() {
     if (a === 'server') serverWizard();
     else if (a === 'signup' || a === 'signin') syncAuthModal(a);
     else if (a === 'recover') { $$('.modal-bg').forEach(x => x.remove()); syncRecoverModal(); }
+    else if (a === 'wipe') {
+      if (!await confirmModal('Effacer les données en ligne', 'Toutes les lignes envoyées au serveur seront supprimées définitivement.<br><br>Les données de ce PC sont conservées, mais les autres PC ne recevront plus rien tant que ce PC n\'aura pas tout renvoyé.', 'Effacer')) return;
+      const res = await api.syncWipe();
+      if (!res.ok) { toast('Échec : ' + res.error); return; }
+      D.sync.lastPull = null;
+      await persist(true);
+      toast('Données en ligne effacées');
+      renderSettings();
+    }
     else if (a === 'out') {
       if (!await confirmModal('Se déconnecter', 'Les données restent sur ce PC. La synchronisation sera arrêtée.', 'Se déconnecter')) return;
       await api.syncSignOut();

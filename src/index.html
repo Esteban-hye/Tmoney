@@ -41,6 +41,7 @@
       <button data-page="settings"><span data-i="settings"></span>Réglages</button>
     </nav>
     <div class="aside-foot">
+      <div id="syncBadge" class="sync-badge" hidden></div>
       <nav>
         <button id="discreetToggle"></button>
         <button id="themeToggle"></button>
@@ -154,6 +155,7 @@
           <div class="set-row"><div>Serveur<small id="syncServer">Non configuré</small></div><button class="btn" data-sync="server">Configurer</button></div>
           <div class="set-row"><div>Compte<small id="syncAccount">Non connecté</small></div><div id="syncButtons" style="display:flex;gap:8px"></div></div>
           <div class="set-row"><div>État<small id="syncState">Synchronisation désactivée</small></div><button class="btn" id="syncNow" hidden>Synchroniser</button></div>
+          <div class="set-row" id="syncWipeRow" hidden><div>Effacer les données en ligne<small>Vide le serveur. Les données de ce PC sont conservées.</small></div><button class="btn danger" data-sync="wipe">Effacer</button></div>
         </div>
         <div class="card">
           <h3>Mises à jour</h3>

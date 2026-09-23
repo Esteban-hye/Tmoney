@@ -250,3 +250,9 @@ label.check input { width: auto; }
 .err.ok { color: var(--in); }
 
 .seg.type3 button.on { background: var(--acc); color: #fff; }
+
+.sync-badge { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--mut); padding: 8px 12px; }
+.sync-badge i { width: 8px; height: 8px; border-radius: 50%; background: var(--in); flex: none; }
+.sync-badge.busy i { background: var(--acc); animation: pulse 1s infinite; }
+.sync-badge.err i { background: var(--out); }
+@keyframes pulse { 50% { opacity: .3; } }
