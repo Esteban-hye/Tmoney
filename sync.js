@@ -186,7 +186,7 @@ async function testServer(cfg) {
   let res;
   for (const table of ['records', 'vault_meta']) {
     try {
-      res = await fetch(`${url}/rest/v1/${table}?select=id&limit=1`, { headers: { apikey: key } });
+      res = await fetch(`${url}/rest/v1/${table}?limit=1`, { headers: { apikey: key } });
     } catch { return { error: 'unreachable' }; }
     if (res.status === 401 || res.status === 403) {
       const t = await res.text();
