@@ -30,6 +30,11 @@
       "target": "dir",
       "icon": "build/icon.png"
     },
+    "publish": {
+      "provider": "github",
+      "owner": "Esteban-hye",
+      "repo": "Tmoney"
+    },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
