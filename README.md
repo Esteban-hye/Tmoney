@@ -15,6 +15,7 @@
 - **Catégories** avec règles : budget max (€/mois) ou part max des entrées (%), fiche détaillée par catégorie
 - **Objectifs d'épargne** avec progression et rythme mensuel conseillé
 - **Export** Excel (.xlsx) et rapport PDF
+- **Synchronisation entre plusieurs PC** : compte email + mot de passe sur une base Supabase personnelle (gratuite), configurée par un assistant intégré ; données chiffrées de bout en bout, le serveur ne peut pas les lire
 - **Sécurité** : données chiffrées localement (AES-256-GCM, clé dérivée du code PIN), mode discret
 - Thème clair / sombre
 

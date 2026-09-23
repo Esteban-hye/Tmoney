@@ -2,8 +2,14 @@
 // Les données sont chiffrées sur le poste avant l'envoi : le serveur ne stocke que du texte illisible.
 const crypto = require('crypto');
 
-const SUPABASE_URL = 'https://qgffqtqqbpatsvjzphhe.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_jprkPJ-Wu6gS_ahw9iZ_1A_DrwkGjs3';
+// Aucun serveur par défaut : chaque utilisateur renseigne le sien via l'assistant de l'application.
+let CFG = { url: '', key: '' };
+const setServer = cfg => {
+  CFG = { url: String(cfg?.url || '').trim().replace(/\/+$/, ''), key: String(cfg?.key || '').trim() };
+  session = null; MK = null;
+  return CFG;
+};
+const getServer = () => ({ ...CFG });
 
 let session = null; // { access_token, refresh_token, expires_at, user_id, email }
 let MK = null;      // clé maîtresse (Buffer 32 octets), jamais transmise au serveur
@@ -33,11 +39,12 @@ function makeRecoveryKey() {
 const recoveryKeyToKey = (rk, salt) => derive(rk.replace(/-/g, '').toUpperCase(), salt);
 
 async function api(path, { method = 'GET', body, headers = {}, auth = true } = {}) {
-  const h = { apikey: SUPABASE_KEY, 'Content-Type': 'application/json', ...headers };
+  if (!CFG.url || !CFG.key) throw new Error('no-server');
+  const h = { apikey: CFG.key, 'Content-Type': 'application/json', ...headers };
   if (auth && session?.access_token) h.Authorization = `Bearer ${session.access_token}`;
   let res;
   try {
-    res = await fetch(SUPABASE_URL + path, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) });
+    res = await fetch(CFG.url + path, { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) });
   } catch (e) {
     throw new Error('offline');
   }
@@ -171,9 +178,33 @@ async function push(records) {
   return rows.length;
 }
 
+// Vérifie l'adresse, la clé et la présence des tables, avec un message clair pour chaque cas
+async function testServer(cfg) {
+  const url = String(cfg?.url || '').trim().replace(/\/+$/, ''), key = String(cfg?.key || '').trim();
+  if (!/^https:\/\/[^\s/]+\.supabase\.co$/.test(url)) return { error: 'url' };
+  if (!key) return { error: 'key' };
+  let res;
+  for (const table of ['records', 'vault_meta']) {
+    try {
+      res = await fetch(`${url}/rest/v1/${table}?select=id&limit=1`, { headers: { apikey: key } });
+    } catch { return { error: 'unreachable' }; }
+    if (res.status === 401 || res.status === 403) {
+      const t = await res.text();
+      if (/api key/i.test(t)) return { error: 'key' };
+    } else if (res.status === 404) {
+      return { error: 'tables' };
+    } else if (!res.ok) {
+      const t = await res.text();
+      if (/does not exist|PGRST205|schema cache/i.test(t)) return { error: 'tables' };
+      return { error: 'other', detail: t.slice(0, 200) };
+    }
+  }
+  return { ok: true };
+}
+
 async function wipe() {
   await ensure();
   await api(`/rest/v1/records?user_id=eq.${session.user_id}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
 }
 
-module.exports = { signUp, signIn, recover, restore, signOut, status, pull, push, wipe, SUPABASE_URL };
+module.exports = { signUp, signIn, recover, restore, signOut, status, pull, push, wipe, setServer, getServer, testServer };

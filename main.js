@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -176,6 +176,10 @@ ipcMain.handle('sync:recover', syncCall((_e, email, pwd, rk, newPwd) => sync.rec
 ipcMain.handle('sync:restore', (_e, saved) => sync.restore(saved));
 ipcMain.handle('sync:signout', () => { sync.signOut(); return true; });
 ipcMain.handle('sync:status', () => sync.status());
+ipcMain.handle('sync:setserver', (_e, cfg) => sync.setServer(cfg));
+ipcMain.handle('sync:testserver', syncCall((_e, cfg) => sync.testServer(cfg)));
+ipcMain.handle('app:open', (_e, url) => { if (/^https:\/\//.test(url)) shell.openExternal(url); });
+ipcMain.handle('app:copy', (_e, text) => { clipboard.writeText(String(text)); return true; });
 ipcMain.handle('sync:pull', syncCall((_e, since) => sync.pull(since)));
 ipcMain.handle('sync:push', syncCall((_e, records) => sync.push(records)));
 ipcMain.handle('sync:wipe', syncCall(() => sync.wipe()));

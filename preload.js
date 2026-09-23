@@ -21,6 +21,10 @@ contextBridge.exposeInMainWorld('tmoney', {
   syncRestore: saved => ipcRenderer.invoke('sync:restore', saved),
   syncSignOut: () => ipcRenderer.invoke('sync:signout'),
   syncStatus: () => ipcRenderer.invoke('sync:status'),
+  syncSetServer: cfg => ipcRenderer.invoke('sync:setserver', cfg),
+  syncTestServer: cfg => ipcRenderer.invoke('sync:testserver', cfg),
+  openExternal: url => ipcRenderer.invoke('app:open', url),
+  copyText: text => ipcRenderer.invoke('app:copy', text),
   syncPull: since => ipcRenderer.invoke('sync:pull', since),
   syncPush: records => ipcRenderer.invoke('sync:push', records),
   syncWipe: () => ipcRenderer.invoke('sync:wipe')

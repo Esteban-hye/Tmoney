@@ -81,7 +81,7 @@ function toast(msg) {
 }
 
 // ================= Données =================
-const emptyData = () => ({ version: 4, settings: { theme: 'dark', discreet: false, serial: false, layout: null, opening: { amount: 0, date: '' }, u: 0 }, cats: [], tx: [], subs: [], goals: [], tomb: {}, dirty: {}, sync: null });
+const emptyData = () => ({ version: 4, settings: { theme: 'dark', discreet: false, serial: false, layout: null, opening: { amount: 0, date: '' }, u: 0 }, cats: [], tx: [], subs: [], goals: [], tomb: {}, dirty: {}, sync: null, server: null });
 // Horodate un enregistrement : sert à départager les modifications entre PC (le plus récent gagne)
 const SYNC_ARRAYS = { tx: 'tx', cat: 'cats', sub: 'subs', goal: 'goals' };
 const markDirty = id => { if (D.dirty) D.dirty[id] = 1; };
@@ -103,6 +103,7 @@ function migrate(d) {
   d.tomb = d.tomb || {};
   d.dirty = d.dirty || {};
   if (!('sync' in d)) d.sync = null;
+  if (!('server' in d)) d.server = null;
   const now = Date.now();
   for (const arr of [d.tx, d.cats, d.subs, d.goals]) for (const o of arr || []) if (!o.u) o.u = now;
   if (!d.settings.u) d.settings.u = now;
@@ -1295,16 +1296,115 @@ function applyRemote(rows) {
   return changed;
 }
 
+const SUPABASE_SQL = `create table if not exists public.vault_meta (
+  user_id uuid primary key references auth.users on delete cascade,
+  salt text not null,
+  wrapped_key text not null,
+  recovery_wrapped text not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.records (
+  user_id uuid not null references auth.users on delete cascade,
+  id text not null,
+  kind text not null,
+  updated_at timestamptz not null default now(),
+  deleted boolean not null default false,
+  payload text,
+  primary key (user_id, id)
+);
+create index if not exists records_user_updated on public.records (user_id, updated_at);
+
+alter table public.vault_meta enable row level security;
+alter table public.records enable row level security;
+
+drop policy if exists vault_meta_own on public.vault_meta;
+create policy vault_meta_own on public.vault_meta
+  for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists records_own on public.records;
+create policy records_own on public.records
+  for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);`;
+const serverHost = () => (D.server?.url || '').replace('https://', '').replace('.supabase.co', '');
+
+function serverWizard() {
+  let step = D.server ? 1 : 0;
+  const draw = form => {
+    const panes = $$('[data-step]', form);
+    panes.forEach(p => { p.hidden = +p.dataset.step !== step; });
+    $('[data-wizard-back]', form).hidden = step === 0;
+    $('footer .btn.pri', form).textContent = step < 2 ? 'Continuer' : 'Tester et enregistrer';
+  };
+  modal({
+    title: 'Configurer le serveur de synchronisation',
+    submit: 'Continuer', cancel: true, wide: true,
+    extraFooter: '<button type="button" class="btn" data-wizard-back>Retour</button>',
+    body: `
+      <div data-step="0">
+        <p style="margin:0 0 12px">La synchronisation entre plusieurs PC passe par une base de données personnelle, gratuite, chez Supabase. Les données y sont déposées chiffrées : le service ne peut pas les lire.</p>
+        <ol style="margin:0;padding-left:20px;line-height:1.9">
+          <li>Créer un compte sur <a href="#" data-open="https://supabase.com">supabase.com</a> (bouton « Start your project »).</li>
+          <li>Cliquer sur <b>New project</b>, nommer le projet <b>tmoney</b>, choisir une région en Europe, plan <b>Free</b>.</li>
+          <li>Attendre la fin de la création (1 à 2 minutes).</li>
+        </ol>
+      </div>
+      <div data-step="1" hidden>
+        <p style="margin:0 0 12px">Dans le projet Supabase : menu <b>SQL Editor</b> → <b>New query</b>, coller le texte ci-dessous puis cliquer sur <b>Run</b>. Cela crée les deux tables nécessaires.</p>
+        <button type="button" class="btn pri" data-copy-sql>Copier le SQL</button>
+        <span class="mut" id="sqlCopied" style="margin-left:10px;font-size:12px"></span>
+        <pre style="max-height:180px;overflow:auto;background:var(--card-2);border:1px solid var(--bd);border-radius:10px;padding:12px;font-size:11px;margin-top:12px">${esc(SUPABASE_SQL)}</pre>
+        <p class="mut" style="margin:12px 0 0;font-size:12px">Ensuite : menu <b>Authentication</b> → <b>Sign In / Providers</b> → désactiver <b>Confirm email</b> et enregistrer.</p>
+      </div>
+      <div data-step="2" hidden>
+        <p style="margin:0 0 12px">Dans le projet Supabase : <b>Project Settings</b> → <b>API Keys</b>.</p>
+        <label class="f">Adresse du projet (Project URL)<input name="url" placeholder="https://xxxxxxxx.supabase.co" value="${esc(D.server?.url || '')}"></label>
+        <label class="f">Clé publishable (ou anon public)<input name="key" placeholder="sb_publishable_..." value="${esc(D.server?.key || '')}"></label>
+        <p class="mut" style="margin:0;font-size:12px">Ne jamais utiliser la clé <b>secret</b> ou <b>service_role</b>.</p>
+      </div>`,
+    onMount: form => {
+      draw(form);
+      $('[data-wizard-back]', form).onclick = () => { step--; draw(form); };
+      $('[data-copy-sql]', form).onclick = async () => {
+        try { await api.copyText(SUPABASE_SQL); $('#sqlCopied').textContent = 'Copié'; }
+        catch { $('#sqlCopied').textContent = 'Copie impossible : sélectionner le texte ci-dessous'; }
+      };
+      $$('[data-open]', form).forEach(a => a.onclick = e => { e.preventDefault(); api.openExternal(a.dataset.open); });
+      Object.defineProperty(form, '_next', { value: () => { step++; draw(form); } });
+    },
+    onSubmit: async form => {
+      if (step < 2) { form._next(); return KEEP_OPEN; }
+      const cfg = { url: form.url.value.trim().replace(/\/+$/, ''), key: form.key.value.trim() };
+      const res = await api.syncTestServer(cfg);
+      const err = res.ok ? res.data.error : 'other';
+      if (err) return {
+        url: "Adresse invalide : elle ressemble à https://xxxxxxxx.supabase.co",
+        key: 'Clé refusée par le serveur : reprendre la clé publishable dans API Keys.',
+        tables: 'Tables absentes : revenir à l\'étape précédente et exécuter le SQL dans le SQL Editor.',
+        unreachable: 'Serveur injoignable : vérifier l\'adresse et la connexion internet.',
+        other: 'Erreur : ' + (res.data?.detail || res.error || 'inconnue')
+      }[err];
+      D.server = cfg;
+      await api.syncSetServer(cfg);
+      await persist();
+      renderSettings();
+      toast('Serveur enregistré');
+    }
+  });
+}
+
 function syncUi() {
   if (page !== 'settings') return;
-  const acc = $('#syncAccount'), st = $('#syncState'), btns = $('#syncButtons'), now = $('#syncNow');
+  const acc = $('#syncAccount'), st = $('#syncState'), btns = $('#syncButtons'), now = $('#syncNow'), srv = $('#syncServer');
   if (!acc) return;
-  const on = !!D.sync?.email;
-  acc.textContent = on ? D.sync.email : 'Non connecté';
+  const on = !!D.sync?.email, hasServer = !!D.server?.url;
+  srv.textContent = hasServer ? serverHost() : 'Non configuré';
+  acc.textContent = on ? D.sync.email : hasServer ? 'Non connecté' : 'Configurer d\'abord le serveur';
   now.hidden = !on;
   btns.innerHTML = on
     ? `<button class="btn" data-sync="out">Se déconnecter</button>`
-    : `<button class="btn pri" data-sync="signup">Créer un compte</button><button class="btn" data-sync="signin">Se connecter</button>`;
+    : hasServer
+      ? `<button class="btn pri" data-sync="signup">Créer un compte</button><button class="btn" data-sync="signin">Se connecter</button>`
+      : '';
   st.textContent = !on ? 'Synchronisation désactivée'
     : syncState.busy ? 'Synchronisation en cours…'
     : syncState.error ? `Erreur : ${syncState.error}`
@@ -1380,9 +1480,11 @@ function syncAuthModal(mode) {
       if (!/^\S+@\S+\.\S+$/.test(email)) return 'Email invalide.';
       if (pwd.length < 8) return 'Mot de passe : 8 caractères minimum.';
       if (signup && pwd !== form.pwd2.value) return 'Les mots de passe ne correspondent pas.';
+      await api.syncSetServer(D.server);
       const res = signup ? await api.syncSignUp(email, pwd) : await api.syncSignIn(email, pwd);
       if (!res.ok) return {
         'offline': 'Pas de connexion internet.',
+        'no-server': 'Serveur non configuré.',
         'confirm-email': 'Compte créé : confirmer l\'email reçu, puis se connecter.',
         'no-vault': 'Compte sans données : créer le compte depuis le premier PC.',
         'bad-key': 'Mot de passe incorrect pour le déchiffrement.',
@@ -1560,7 +1662,8 @@ async function startApp() {
   R = makeRange('month', todayStr());
   if (!bound) bindEvents();
   go('dashboard');
-  if (D.sync?.session && await api.syncRestore(D.sync)) { startSyncLoop(); syncNow(true); }
+  if (D.server?.url) await api.syncSetServer(D.server);
+  if (D.server?.url && D.sync?.session && await api.syncRestore(D.sync)) { startSyncLoop(); syncNow(true); }
 }
 
 function bindEvents() {
@@ -1631,7 +1734,8 @@ function bindEvents() {
     const b = e.target.closest('[data-sync]');
     if (!b) return;
     const a = b.dataset.sync;
-    if (a === 'signup' || a === 'signin') syncAuthModal(a);
+    if (a === 'server') serverWizard();
+    else if (a === 'signup' || a === 'signin') syncAuthModal(a);
     else if (a === 'recover') { $$('.modal-bg').forEach(x => x.remove()); syncRecoverModal(); }
     else if (a === 'out') {
       if (!await confirmModal('Se déconnecter', 'Les données restent sur ce PC. La synchronisation sera arrêtée.', 'Se déconnecter')) return;
