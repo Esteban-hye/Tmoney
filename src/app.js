@@ -482,6 +482,9 @@ function renderDashboard() {
     let b = balanceAt(addDays(R.start, -1));
     const daily = Array(totalDays).fill(0);
     st.items.forEach(t => { daily[dayCount(R.start, t.date) - 1] += signOf(t); });
+    // Solde de départ daté dans la période : il s'ajoute ce jour-là (avant, balanceAt ne le compte pas encore).
+    const o = D.settings.opening || {};
+    if (o.amount && o.date >= R.start && o.date <= R.end) daily[dayCount(R.start, o.date) - 1] += o.amount;
     const vals = daily.map(v => (b += v));
     const cut = today < R.start ? -1 : today > R.end ? totalDays - 1 : dayCount(R.start, today) - 1;
     after.push(() => chart('ch-balance', {
