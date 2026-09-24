@@ -156,7 +156,7 @@ function itemsIn(start, end) {
       const v = subVersion(s, m);
       const date = `${m}-${pad(Math.min(v.day, daysIn(m)))}`;
       if (date < start || date > end) continue;
-      items.push({ id: 'sub-' + s.id + '-' + m, subId: s.id, type: v.type || s.type, amount: v.amount, cat: v.cat, tag: v.tag, date, desc: v.name, notes: v.notes || '', sub: true });
+      items.push({ id: 'sub-' + s.id + '-' + m, subId: s.id, type: v.type || s.type, amount: v.amount, cat: v.cat, tag: v.tag, tags: tagsOf(v), date, desc: v.name, notes: v.notes || '', sub: true });
     }
   }
   return items.sort((a, b) => b.date.localeCompare(a.date) || b.amount - a.amount);
@@ -205,12 +205,13 @@ function stats(r) {
   const items = itemsIn(r.start, r.end);
   const ins = items.filter(t => t.type === 'in'), outs = items.filter(t => t.type === 'out');
   const group = (arr, key) => { const map = new Map(); for (const t of arr) { if (t[key]) map.set(t[key], (map.get(t[key]) || 0) + t.amount); } return map; };
+  const groupTags = arr => { const map = new Map(); for (const t of arr) for (const g of tagsOf(t)) map.set(g, (map.get(g) || 0) + t.amount); return map; };
   const inn = sumBy(ins), out = sumBy(outs), fixedOut = sumBy(outs.filter(t => t.sub));
   let savings = 0;
   for (const g of D.goals) for (const mv of g.moves) if (mv.date >= r.start && mv.date <= r.end) savings += mv.amount;
   return {
     r, items, ins, outs, inn, out, net: inn - out, fixedOut, varOut: out - fixedOut, savings,
-    byCatOut: group(outs, 'cat'), byCatIn: group(ins, 'cat'), byTagOut: group(outs, 'tag')
+    byCatOut: group(outs, 'cat'), byCatIn: group(ins, 'cat'), byTagOut: groupTags(outs)
   };
 }
 
@@ -608,6 +609,11 @@ function bindLayoutDnd() {
   grid.addEventListener('dragend', () => { dragId = null; clear(); });
 }
 
+// Étiquettes multiples : "tags" = liste, "tag" = première étiquette (lue par les versions ≤ 0.7).
+// Si "tag" ne correspond plus à tags[0], c'est qu'une ancienne version a modifié l'élément : on suit "tag".
+const tagsOf = x => Array.isArray(x.tags) && (x.tags[0] || '') === (x.tag || '') ? x.tags : x.tag ? [x.tag] : [];
+const withTags = tags => ({ tags, tag: tags[0] || '' });
+const tagNames = x => tagsOf(x).map(catName).join(', ');
 const catTag = (id, dashed) => `<span class="tag ${dashed ? 'lbl' : ''}"><i class="dot" style="background:${catColor(id)}"></i>${esc(catName(id))}</span>`;
 
 // ================= Transactions =================
@@ -622,18 +628,18 @@ function renderTransactions() {
   const source = all ? itemsIn('0000-01-01', [todayStr(), ...D.tx.map(t => t.date)].sort().pop()) : itemsIn(R.start, R.end);
   const list = source.filter(t =>
     (txType === 'all' || t.type === txType) &&
-    (!fc || t.cat === fc || t.tag === fc) &&
-    (!q || [t.desc, t.notes, catName(t.cat), t.tag ? catName(t.tag) : ''].some(s => (s || '').toLowerCase().includes(q)) || (isFinite(qNum) && qNum > 0 && Math.abs(t.amount - qNum) < 0.005)));
+    (!fc || t.cat === fc || tagsOf(t).includes(fc)) &&
+    (!q || [t.desc, t.notes, catName(t.cat), tagNames(t)].some(s => (s || '').toLowerCase().includes(q)) || (isFinite(qNum) && qNum > 0 && Math.abs(t.amount - qNum) < 0.005)));
   const inn = sumBy(list.filter(t => t.type === 'in')), out = sumBy(list.filter(t => t.type === 'out'));
   $('#txTotals').innerHTML = `<span>Entrées <b class="in">${eur(inn)}</b></span><span>Sorties <b class="out">${eur(out)}</b></span><span>${plural(list.length, 'ligne')}</span>`;
   const shown = list.slice(0, 1000);
   $('#txTable').innerHTML = list.length
-    ? `<thead><tr><th style="width:100px">Date</th><th>Description</th><th>Catégorie</th><th>Étiquette</th><th class="r">Montant</th><th style="width:90px"></th></tr></thead><tbody>` +
+    ? `<thead><tr><th style="width:100px">Date</th><th>Description</th><th>Catégorie</th><th>Étiquettes</th><th class="r">Montant</th><th style="width:90px"></th></tr></thead><tbody>` +
       shown.map(t => `<tr>
         <td class="num mut">${fmtDate(t.date)}</td>
         <td class="cell-desc"><b>${esc(t.desc) || '<span class="mut">–</span>'}</b> ${t.sub ? '<span class="badge">Mensualité</span>' : ''}${t.notes ? `<small title="${esc(t.notes)}">${esc(t.notes)}</small>` : ''}</td>
         <td><span class="clickable" data-cat-detail="${t.cat}">${catTag(t.cat)}</span></td>
-        <td>${t.tag ? `<span class="clickable" data-cat-detail="${t.tag}">${catTag(t.tag, true)}</span>` : '<span class="mut">–</span>'}</td>
+        <td>${tagsOf(t).length ? `<div class="tags">${tagsOf(t).map(g => `<span class="clickable" data-cat-detail="${g}">${catTag(g, true)}</span>`).join('')}</div>` : '<span class="mut">–</span>'}</td>
         <td class="r num ${t.type}" style="font-weight:600">${t.type === 'in' ? '+' : '−'}${eur(t.amount)}</td>
         <td class="r">${t.sub
           ? `<button class="icon-btn" title="Modifier la mensualité" data-edit-sub="${t.subId}">${ic('edit')}</button>`
@@ -659,7 +665,7 @@ function renderSubs() {
     const list = D.subs.filter(s => s.type === type).sort((a, b) => amountOf(b) - amountOf(a));
     if (!list.length) return `<tr><td class="empty">Aucune mensualité</td></tr>`;
     const tot = sumBy(list.filter(s => subActiveIn(s, m)), amountOf);
-    return `<thead><tr><th>Nom</th><th>Catégorie</th><th>Étiquette</th><th>Jour</th><th>Statut</th><th class="r">Montant</th><th class="r">Par an</th><th class="r">Part</th><th style="width:120px"></th></tr></thead><tbody>` +
+    return `<thead><tr><th>Nom</th><th>Catégorie</th><th>Étiquettes</th><th>Jour</th><th>Statut</th><th class="r">Montant</th><th class="r">Par an</th><th class="r">Part</th><th style="width:120px"></th></tr></thead><tbody>` +
       list.map(s => {
         const v = subVersion(s, m), on = subActiveIn(s, m);
         const status = !on && s.start > m ? `<span class="badge grey">Début ${monthShort(s.start)}</span>`
@@ -669,7 +675,7 @@ function renderSubs() {
           ? `<span class="badge grey" title="${esc(s.versions.map(x => `${monthShort(x.from)} : ${eur(x.amount)}`).join(' · '))}">${plural(s.versions.length, 'montant')}</span>` : '';
         return `<tr style="${on ? '' : 'opacity:.55'}">
           <td class="cell-desc"><b>${esc(v.name)}</b> ${hist}${v.notes ? `<small>${esc(v.notes)}</small>` : ''}</td>
-          <td>${catTag(v.cat)}</td><td>${v.tag ? catTag(v.tag, true) : '<span class="mut">–</span>'}</td>
+          <td>${catTag(v.cat)}</td><td>${tagsOf(v).length ? `<div class="tags">${tagsOf(v).map(g => catTag(g, true)).join('')}</div>` : '<span class="mut">–</span>'}</td>
           <td class="mut">${v.day}</td><td>${status}</td>
           <td class="r num ${type}" style="font-weight:600">${eur(v.amount)}</td>
           <td class="r num mut">${eur(v.amount * 12)}</td>
@@ -688,7 +694,7 @@ function renderSubs() {
 function renderCats() {
   const st = stats(R);
   const byCatIn = st.byCatIn, byTagAll = new Map();
-  st.items.forEach(t => { if (t.tag) byTagAll.set(t.tag, (byTagAll.get(t.tag) || 0) + t.amount); });
+  st.items.forEach(t => { for (const g of tagsOf(t)) byTagAll.set(g, (byTagAll.get(g) || 0) + t.amount); });
   const card = (c, sense) => {
     const total = (sense === 'out' ? st.byCatOut : byCatIn).get(c.id) || 0;
     const base = sense === 'out' ? st.out : st.inn;
@@ -713,8 +719,8 @@ function renderCats() {
 function catDetail(id) {
   const c = cat(id); if (!c) return;
   const endM = R.end.slice(0, 7), months = [...Array(12)].map((_, i) => shiftMonth(endM, i - 11));
-  const series = months.map(m => { const it = monthItems(m); return { main: sumBy(it.filter(t => t.cat === id)), tag: sumBy(it.filter(t => t.tag === id)) }; });
-  const history = itemsIn('0000-01-01', [todayStr(), ...D.tx.map(t => t.date)].sort().pop()).filter(t => t.cat === id || t.tag === id);
+  const series = months.map(m => { const it = monthItems(m); return { main: sumBy(it.filter(t => t.cat === id)), tag: sumBy(it.filter(t => tagsOf(t).includes(id))) }; });
+  const history = itemsIn('0000-01-01', [todayStr(), ...D.tx.map(t => t.date)].sort().pop()).filter(t => t.cat === id || tagsOf(t).includes(id));
   const total12 = sumBy(series, s => s.main), activeMonths = series.filter(s => s.main > 0).length;
   const st = stats(R), rules = c.type === 'out' ? ruleStatus(c, st) : [];
   const periodTotal = (c.type === 'out' ? st.byCatOut : st.byCatIn).get(id) || 0;
@@ -730,7 +736,7 @@ function catDetail(id) {
       ${rules.length ? `<div class="card"><h3>Règles <span class="mut">${esc(rangeLabel(R))}</span></h3>${rules.map(rs => `<div class="rule"><div class="top"><span>${rs.label}</span><span>${rs.detail}</span></div><div class="prog ${rs.level}"><i style="width:${Math.min(100, rs.ratio * 100)}%"></i></div></div>`).join('')}</div>` : ''}
       <div class="card"><h3>Historique <span class="mut">${plural(history.length, 'transaction')}</span></h3>
         <div class="table-wrap" style="max-height:320px;overflow-y:auto"><table><tbody>
-        ${history.slice(0, 500).map(t => `<tr><td class="num mut" style="width:100px">${fmtDate(t.date)}</td><td class="cell-desc"><b>${esc(t.desc) || '–'}</b> ${t.sub ? '<span class="badge">Mensualité</span>' : ''} ${t.tag === id ? '<span class="badge grey">Étiquette</span>' : ''}${t.notes ? `<small>${esc(t.notes)}</small>` : ''}</td><td>${t.tag === id ? catTag(t.cat) : t.tag ? catTag(t.tag, true) : ''}</td><td class="r num ${t.type}" style="font-weight:600">${t.type === 'in' ? '+' : '−'}${eur(t.amount)}</td></tr>`).join('') || '<tr><td class="empty">Aucune transaction</td></tr>'}
+        ${history.slice(0, 500).map(t => `<tr><td class="num mut" style="width:100px">${fmtDate(t.date)}</td><td class="cell-desc"><b>${esc(t.desc) || '–'}</b> ${t.sub ? '<span class="badge">Mensualité</span>' : ''} ${t.cat !== id ? '<span class="badge grey">Étiquette</span>' : ''}${t.notes ? `<small>${esc(t.notes)}</small>` : ''}</td><td><div class="tags">${t.cat !== id ? catTag(t.cat) : ''}${tagsOf(t).filter(g => g !== id).map(g => catTag(g, true)).join('')}</div></td><td class="r num ${t.type}" style="font-weight:600">${t.type === 'in' ? '+' : '−'}${eur(t.amount)}</td></tr>`).join('') || '<tr><td class="empty">Aucune transaction</td></tr>'}
         </tbody></table></div></div>`,
     onMount: () => chart('ch-catdetail', {
       type: 'bar',
@@ -825,8 +831,24 @@ const confirmModal = (title, text, action = 'Supprimer') => new Promise(res => {
 });
 
 const catOptions = (type, selected) => catsOf(type).map(c => `<option value="${c.id}" ${c.id === selected ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
-const tagOptions = selected => `<option value="">Aucune</option>` +
-  ['out', 'in'].map(t => catsOf(t).length ? `<optgroup label="${t === 'out' ? 'Sorties' : 'Entrées'}">${catsOf(t).map(c => `<option value="${c.id}" ${c.id === selected ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>` : '').join('');
+const tagPicker = selected => {
+  const list = [...new Map([...catsOf('out'), ...catsOf('in')].map(c => [c.id, c])).values()];
+  return `<div class="f"><span>Étiquettes <small class="mut">(plusieurs possibles)</small></span><div class="tag-pick">${list.map(c =>
+    `<label class="tag lbl pick"><input type="checkbox" name="tags" value="${c.id}" ${selected.includes(c.id) ? 'checked' : ''}><i class="dot" style="background:${c.color}"></i>${esc(c.name)}</label>`).join('') || '<span class="mut">Aucune catégorie</span>'}</div></div>`;
+};
+// Masque l'étiquette correspondant à la catégorie choisie ; à rappeler quand la liste des catégories change.
+const bindTagPick = form => {
+  const upd = () => form.querySelectorAll('input[name="tags"]').forEach(i => {
+    const off = i.value === form.cat.value;
+    i.closest('label').style.display = off ? 'none' : '';
+    if (off) i.checked = false;
+  });
+  form.cat.addEventListener('change', upd);
+  upd();
+  return upd;
+};
+// Étiquettes cochées, sans la catégorie principale.
+const pickedTags = form => Array.from(form.querySelectorAll('input[name="tags"]:checked'), i => i.value).filter(id => id !== form.cat.value);
 const typeSeg = type => `<div class="seg type" data-type-seg style="align-self:flex-start"><button type="button" data-v="out" class="${type === 'out' ? 'on' : ''}">Sortie</button><button type="button" data-v="in" class="${type === 'in' ? 'on' : ''}">Entrée</button></div>`;
 function bindTypeSeg(form, onChange) {
   $$('[data-type-seg] button', form).forEach(b => b.onclick = () => {
@@ -839,7 +861,7 @@ const catTypeSeg = type => `<div class="seg type3" data-type-seg style="align-se
 const NO_CAT = 'Aucune catégorie de ce type. Créer une catégorie dans Catégories.';
 
 function txModal(existing, presetType) {
-  const t = existing || { type: presetType || 'out', amount: '', date: todayStr() >= R.start && todayStr() <= R.end ? todayStr() : R.start, cat: '', tag: '', desc: '', notes: '' };
+  const t = existing || { type: presetType || 'out', amount: '', date: todayStr() >= R.start && todayStr() <= R.end ? todayStr() : R.start, cat: '', tag: '', tags: [], desc: '', notes: '' };
   let added = 0;
   modal({
     title: existing ? 'Modifier la transaction' : 'Nouvelle transaction',
@@ -848,14 +870,15 @@ function txModal(existing, presetType) {
     body: `${typeSeg(t.type)}
       <div class="row"><label class="f">Montant (€)<input name="amount" inputmode="decimal" value="${t.amount}" placeholder="0,00"></label>
         <label class="f">Date<input name="date" type="date" value="${t.date}"></label></div>
-      <div class="row"><label class="f">Catégorie<select name="cat"></select></label>
-        <label class="f">Étiquette<select name="tag">${tagOptions(t.tag)}</select></label></div>
+      <label class="f">Catégorie<select name="cat"></select></label>
+      ${tagPicker(tagsOf(t))}
       <label class="f">Description<input name="desc" value="${esc(t.desc)}"></label>
       <label class="f">Notes<textarea name="notes">${esc(t.notes)}</textarea></label>`,
     onMount: form => {
       const fill = type => { form.cat.innerHTML = catsOf(type).length ? catOptions(type, t.cat) : '<option value="">–</option>'; };
       fill(t.type);
-      bindTypeSeg(form, fill);
+      const updTags = bindTagPick(form);
+      bindTypeSeg(form, type => { fill(type); updTags(); });
       if (form.serial) form.serial.onchange = () => { D.settings.serial = form.serial.checked; stampSettings(); persist(); };
     },
     onSubmit: (form, errEl) => {
@@ -863,8 +886,7 @@ function txModal(existing, presetType) {
       if (!(amount > 0)) return 'Montant invalide.';
       if (!form.date.value) return 'Date manquante.';
       if (!form.cat.value) return NO_CAT;
-      if (form.tag.value && form.tag.value === form.cat.value) return 'Étiquette identique à la catégorie.';
-      const data = { type: segVal(form), amount, date: form.date.value, cat: form.cat.value, tag: form.tag.value || '', desc: form.desc.value.trim(), notes: form.notes.value.trim() };
+      const data = { type: segVal(form), amount, date: form.date.value, cat: form.cat.value, ...withTags(pickedTags(form)), desc: form.desc.value.trim(), notes: form.notes.value.trim() };
       if (existing) stamp(Object.assign(D.tx.find(x => x.id === existing.id), data));
       else D.tx.push(stamp({ id: uid(), ...data }));
       if (data.date < R.start || data.date > R.end) R = R.kind === 'custom' ? makeRange('month', data.date) : makeRange(R.kind, data.date);
@@ -873,7 +895,7 @@ function txModal(existing, presetType) {
         added++;
         errEl.classList.add('ok');
         errEl.textContent = `Ajouté : ${data.desc || catName(data.cat)} ${data.type === 'in' ? '+' : '−'}${eur(amount)} · ${plural(added, 'saisie')}`;
-        form.amount.value = ''; form.desc.value = ''; form.notes.value = ''; form.tag.value = '';
+        form.amount.value = ''; form.desc.value = ''; form.notes.value = ''; form.querySelectorAll('input[name="tags"]').forEach(i => { i.checked = false; });
         form.amount.focus();
         return KEEP_OPEN;
       }
@@ -885,8 +907,8 @@ function txModal(existing, presetType) {
 function subModal(existing) {
   const cur = existing ? subNow(existing) : null;
   const s = existing
-    ? { type: existing.type, name: cur.name, amount: cur.amount, cat: cur.cat, tag: cur.tag, day: cur.day, start: existing.start, end: existing.end || '', notes: cur.notes || '' }
-    : { type: 'out', name: '', amount: '', cat: '', tag: '', day: 1, start: thisMonth(), end: '', notes: '' };
+    ? { type: existing.type, name: cur.name, amount: cur.amount, cat: cur.cat, tags: tagsOf(cur), day: cur.day, start: existing.start, end: existing.end || '', notes: cur.notes || '' }
+    : { type: 'out', name: '', amount: '', cat: '', tags: [], day: 1, start: thisMonth(), end: '', notes: '' };
   const versionsHtml = () => !existing || existing.versions.length < 2 ? '' :
     `<div class="f"><span>Historique des montants</span>
       ${existing.versions.map((v, i) => `<div style="display:flex;align-items:center;gap:10px;padding:5px 0;border-top:1px solid var(--bd)">
@@ -900,8 +922,8 @@ function subModal(existing) {
     body: `${typeSeg(s.type)}
       <div class="row"><label class="f">Nom<input name="name" value="${esc(s.name)}"></label>
         <label class="f" style="flex:.6">Montant (€)<input name="amount" inputmode="decimal" value="${s.amount}" placeholder="0,00"></label></div>
-      <div class="row"><label class="f">Catégorie<select name="cat"></select></label>
-        <label class="f">Étiquette<select name="tag">${tagOptions(s.tag)}</select></label></div>
+      <label class="f">Catégorie<select name="cat"></select></label>
+      ${tagPicker(s.tags)}
       <div class="row"><label class="f">Jour du mois<input name="day" type="number" min="1" max="31" value="${s.day}"></label>
         <label class="f">Début<input name="start" type="month" value="${s.start}"></label>
         <label class="f">Fin (optionnel)<input name="end" type="month" value="${s.end || ''}"></label></div>
@@ -910,7 +932,7 @@ function subModal(existing) {
       ${versionsHtml()}`,
     onMount: form => {
       const fill = type => { form.cat.innerHTML = catsOf(type).length ? catOptions(type, s.cat) : '<option value="">–</option>'; };
-      fill(s.type); bindTypeSeg(form, fill);
+      fill(s.type); const updTags = bindTagPick(form); bindTypeSeg(form, type => { fill(type); updTags(); });
       $$('[data-vdel]', form).forEach(b => b.onclick = async () => {
         const i = +b.dataset.vdel;
         if (!await confirmModal('Supprimer ce changement', `Le montant appliqué depuis ${monthLabel(existing.versions[i].from)} sera supprimé : la valeur précédente s'appliquera de nouveau.`)) return;
@@ -926,12 +948,11 @@ function subModal(existing) {
       if (!form.name.value.trim()) return 'Nom manquant.';
       if (!(amount > 0)) return 'Montant invalide.';
       if (!form.cat.value) return NO_CAT;
-      if (form.tag.value && form.tag.value === form.cat.value) return 'Étiquette identique à la catégorie.';
       if (!(day >= 1 && day <= 31)) return 'Jour invalide (1 à 31).';
       if (!form.start.value) return 'Mois de début manquant.';
       if (form.end.value && form.end.value < form.start.value) return 'La fin précède le début.';
       const type = segVal(form);
-      const version = { amount, cat: form.cat.value, tag: form.tag.value || '', day, name: form.name.value.trim(), notes: form.notes.value.trim(), type };
+      const version = { amount, cat: form.cat.value, ...withTags(pickedTags(form)), day, name: form.name.value.trim(), notes: form.notes.value.trim(), type };
       if (existing) {
         const eff = form.effective.value;
         const from = eff && eff > form.start.value ? eff : form.start.value;
@@ -1080,7 +1101,7 @@ async function exportXlsx() {
       { name: 'Par catégorie', columns: [{ header: 'Type', key: 'type', width: 10 }, { header: 'Catégorie', key: 'cat', width: 24 }, { header: 'Total', key: 'total', money: 1 }, { header: 'Nombre', key: 'n', width: 10 }, { header: 'Part', key: 'part', pct: 1 }],
         rows: [...byCat.values()].sort((a, b) => a.type.localeCompare(b.type) || b.total - a.total).map(e => ({ ...e, part: e.total / ((e.type === 'Entrée' ? totIn : totOut) || 1) })) },
       { name: 'Transactions', columns: [{ header: 'Date', key: 'date', width: 12 }, { header: 'Type', key: 'type', width: 10 }, { header: 'Catégorie', key: 'cat', width: 22 }, { header: 'Étiquette', key: 'tag', width: 22 }, { header: 'Description', key: 'desc', width: 30 }, { header: 'Notes', key: 'notes', width: 36 }, { header: 'Montant', key: 'amount', money: 1 }, { header: 'Mensualité', key: 'sub', width: 12 }],
-        rows: items.map(t => ({ date: fmtDate(t.date), type: t.type === 'in' ? 'Entrée' : 'Sortie', cat: catName(t.cat), tag: t.tag ? catName(t.tag) : '', desc: t.desc, notes: t.notes, amount: signOf(t), sub: t.sub ? 'Oui' : '' })) },
+        rows: items.map(t => ({ date: fmtDate(t.date), type: t.type === 'in' ? 'Entrée' : 'Sortie', cat: catName(t.cat), tag: tagNames(t), desc: t.desc, notes: t.notes, amount: signOf(t), sub: t.sub ? 'Oui' : '' })) },
       { name: 'Mensualités', columns: [{ header: 'Nom', key: 'name', width: 24 }, { header: 'Type', key: 'type', width: 10 }, { header: 'Catégorie', key: 'cat', width: 22 }, { header: 'Jour', key: 'day', width: 8 }, { header: 'Montant', key: 'amount', money: 1 }, { header: 'Par an', key: 'year', money: 1 }, { header: 'Début', key: 'start' }, { header: 'Fin', key: 'end' }],
         rows: D.subs.map(s => { const v = subNow(s); return { name: v.name, type: s.type === 'in' ? 'Entrée' : 'Sortie', cat: catName(v.cat), day: v.day, amount: v.amount, year: v.amount * 12, start: s.start, end: s.end || '' }; }) },
       { name: 'Catégories', columns: [{ header: 'Nom', key: 'name', width: 24 }, { header: 'Type', key: 'type', width: 12 }, { header: 'Couleur', key: 'color', width: 12 }, { header: 'Règles', key: 'rules', width: 40 }],
@@ -1129,10 +1150,11 @@ async function importXlsx() {
     if (String(r['Mensualité'] ?? '').trim().toLowerCase() === 'oui') continue;
     const d = date(r['Date']), amount = Math.abs(num(r['Montant'])), type = typeOf(r['Type']);
     if (!d || !(amount > 0)) continue;
-    const cat = ensureCat(r['Catégorie'], type), tag = r['Étiquette'] ? ensureCat(r['Étiquette'], type) : '';
+    const cat = ensureCat(r['Catégorie'], type);
+    const tags = String(r['Étiquette'] ?? '').split(',').map(x => x.trim()).filter(Boolean).map(x => ensureCat(x, type)).filter(id => id !== cat);
     const desc = String(r['Description'] ?? '').trim();
     if (D.tx.some(t => t.date === d && t.type === type && Math.abs(t.amount - amount) < 0.005 && (t.desc || '') === desc && t.cat === cat)) { n.dup++; continue; }
-    D.tx.push(stamp({ id: uid(), type, amount, date: d, cat, tag, desc, notes: String(r['Notes'] ?? '').trim() }));
+    D.tx.push(stamp({ id: uid(), type, amount, date: d, cat, ...withTags([...new Set(tags)]), desc, notes: String(r['Notes'] ?? '').trim() }));
     n.tx++;
   }
   for (const r of sh['Mensualités'] || []) {
@@ -1235,7 +1257,7 @@ async function exportPdf() {
       ${rules.length ? `<h2>Règles</h2><table><tr><th>Catégorie</th><th>Règle</th><th class="r">Réalisé</th><th class="r">Statut</th></tr>${rules.map(x => `<tr><td>${esc(x.c.name)}</td><td>${x.label}</td><td class="r">${x.detail}</td><td class="r ${x.level === 'over' ? 'out' : x.level === 'ok' ? 'in' : ''}">${x.level === 'over' ? 'Dépassé' : x.level === 'warn' ? 'Alerte' : 'OK'}</td></tr>`).join('')}</table>` : ''}
       <h2>Transactions</h2>
       <table><tr><th>Date</th><th>Description</th><th>Catégorie</th><th>Étiquette</th><th class="r">Montant</th></tr>
-        ${st.items.slice().reverse().map(t => `<tr><td>${fmtDate(t.date)}</td><td>${esc(t.desc)}${t.sub ? ' <small style="color:#2f7cf6">(mensualité)</small>' : ''}</td><td>${esc(catName(t.cat))}</td><td>${t.tag ? esc(catName(t.tag)) : ''}</td><td class="r ${t.type}">${t.type === 'in' ? '+' : '−'}${eur(t.amount)}</td></tr>`).join('') || '<tr><td colspan="5">Aucune transaction</td></tr>'}
+        ${st.items.slice().reverse().map(t => `<tr><td>${fmtDate(t.date)}</td><td>${esc(t.desc)}${t.sub ? ' <small style="color:#2f7cf6">(mensualité)</small>' : ''}</td><td>${esc(catName(t.cat))}</td><td>${esc(tagNames(t))}</td><td class="r ${t.type}">${t.type === 'in' ? '+' : '−'}${eur(t.amount)}</td></tr>`).join('') || '<tr><td colspan="5">Aucune transaction</td></tr>'}
       </table>
       ${D.goals.length ? `<h2>Objectifs d'épargne</h2><table><tr><th>Objectif</th><th class="r">Épargné</th><th class="r">Visé</th><th class="r">Progression</th></tr>${D.goals.map(g => { const s = sumBy(g.moves); return `<tr><td>${esc(g.name)}</td><td class="r">${eur(s)}</td><td class="r">${eur(g.target)}</td><td class="r">${pct(s / g.target * 100, 0)}</td></tr>`; }).join('')}</table>` : ''}
       <div class="foot">Tmoney</div>
@@ -1863,7 +1885,7 @@ function bindEvents() {
     }
     else if (d.editCat) catModal(cat(d.editCat));
     else if (d.delCat) {
-      const used = D.tx.filter(t => t.cat === d.delCat || t.tag === d.delCat).length + D.subs.filter(s => s.versions.some(v => v.cat === d.delCat || v.tag === d.delCat)).length;
+      const used = D.tx.filter(t => t.cat === d.delCat || tagsOf(t).includes(d.delCat)).length + D.subs.filter(s => s.versions.some(v => v.cat === d.delCat || tagsOf(v).includes(d.delCat))).length;
       if (used) { modal({ title: 'Suppression impossible', body: `<p style="margin:0">« ${esc(catName(d.delCat))} » est utilisée par ${plural(used, 'élément')} (transactions ou mensualités).</p>`, submit: 'OK', cancel: false, onSubmit: () => {} }); return; }
       if (await confirmModal('Supprimer la catégorie', `Suppression de « ${esc(catName(d.delCat))} ».`)) { markDeleted(d.delCat, 'cat'); D.cats = D.cats.filter(c => c.id !== d.delCat); persist(); render(); }
     }

@@ -10,7 +10,7 @@
 - **Tableau de bord personnalisable** (glisser-déposer, blocs masquables) : solde reporté d'un mois à l'autre, entrées, sorties, résultat, taux d'épargne
 - **Périodes** : semaine, mois, année ou dates libres
 - **Graphiques** : entrées/sorties sur 12 mois, sorties cumulées, évolution du solde, calendrier des sorties, jours de la semaine, 6 répartitions en camembert, comparaison de deux mois
-- **Transactions** : catégorie + étiquette, description, notes, saisie en série, recherche sur tout l'historique
+- **Transactions** : catégorie + plusieurs étiquettes, description, notes, saisie en série, recherche sur tout l'historique
 - **Mensualités** : sorties et entrées fixes comptées automatiquement chaque mois
 - **Catégories** avec règles : budget max (€/mois) ou part max des entrées (%), fiche détaillée par catégorie
 - **Objectifs d'épargne** avec progression et rythme mensuel conseillé
