@@ -312,10 +312,17 @@ const BLOCKS = {
   lastIn: { title: 'Dernières entrées', span: 6 },
   lastOut: { title: 'Dernières sorties', span: 6 }
 };
-const defaultLayout = () => Object.keys(BLOCKS).map(id => ({ id, hidden: false }));
+// Graphiques personnalisés (D.settings.charts) : { id, title, type, sense, src, span, items: [id catégorie] }
+const CHART_TYPES = { pie: 'Camembert (période affichée)', hbar: 'Barres (période affichée)', bars12: 'Barres sur 12 mois', line12: 'Courbes sur 12 mois' };
+const CHART_SRC = { both: 'Catégorie ou étiquette', cat: 'Catégorie principale seulement', tag: 'Étiquettes seulement' };
+const CHART_SPANS = { 4: 'Petit (1/3)', 6: 'Moyen (1/2)', 8: 'Grand (2/3)', 12: 'Pleine largeur' };
+const customCharts = () => D.settings.charts || [];
+const blockDef = id => BLOCKS[id] || (c => c && { title: esc(c.title), span: c.span, custom: c })(customCharts().find(c => c.id === id));
+const allBlockIds = () => [...Object.keys(BLOCKS), ...customCharts().map(c => c.id)];
+const defaultLayout = () => allBlockIds().map(id => ({ id, hidden: false }));
 function layout() {
-  const saved = (D.settings.layout || []).filter(b => BLOCKS[b.id]);
-  for (const id of Object.keys(BLOCKS)) if (!saved.some(b => b.id === id)) saved.push({ id, hidden: false });
+  const saved = (D.settings.layout || []).filter(b => blockDef(b.id));
+  for (const id of allBlockIds()) if (!saved.some(b => b.id === id)) saved.push({ id, hidden: false });
   return saved;
 }
 let editing = false;
@@ -331,7 +338,7 @@ function deltaHtml(cur, prev, goodWhenUp) {
   return `<span class="delta" style="color:var(${good ? '--in' : '--out'})">${d >= 0 ? '+' : ''}${pct(d, 0)}</span> vs ${PERIOD_NAMES[R.kind]} préc.`;
 }
 
-function pieBlock(id, sub, entries, centerLabel, after) {
+function pieBlock(id, sub, entries, centerLabel, after, title = BLOCKS[id]?.title) {
   const total = sumBy(entries, e => e.value);
   const body = total > 0
     ? `<div class="pie"><div class="ring"><canvas id="ch-${id}"></canvas><div class="center"><div><b>${eur0(total)}</b><span>${centerLabel}</span></div></div></div>
@@ -345,7 +352,73 @@ function pieBlock(id, sub, entries, centerLabel, after) {
       options: { maintainAspectRatio: false, cutout: '68%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ` ${c.label} : ${eur(c.parsed)} (${pct(c.parsed / total * 100)})` } } } }
     });
   });
-  return cardHtml(BLOCKS[id].title, sub, body);
+  return cardHtml(title, sub, body);
+}
+
+function customBlock(c, st, after) {
+  const ids = (c.items || []).filter(id => cat(id));
+  const title = esc(c.title), cid = 'ch-' + c.id;
+  if (!ids.length) return cardHtml(title, '', emptyHtml('Aucune catégorie choisie : cliquer sur « Personnaliser » puis sur le crayon'));
+  const match = (t, id) => t.type === c.sense && ((c.src !== 'tag' && t.cat === id) || (c.src !== 'cat' && tagsOf(t).includes(id)));
+  const senseLbl = c.sense === 'in' ? 'entrées' : 'sorties';
+  if (c.type === 'pie' || c.type === 'hbar') {
+    const entries = ids.map(id => ({ id, label: catName(id), value: sumBy(st.items.filter(t => match(t, id))), color: catColor(id) }))
+      .filter(e => e.value > 0).sort((a, b) => b.value - a.value);
+    if (c.type === 'pie') return pieBlock(c.id, senseLbl, entries, senseLbl, after, title);
+    if (!entries.length) return cardHtml(title, senseLbl, emptyHtml('Aucune donnée'));
+    after.push(() => chart(cid, {
+      type: 'bar',
+      data: { labels: entries.map(e => e.label), datasets: [{ data: entries.map(e => e.value), backgroundColor: entries.map(e => e.color), borderRadius: 5, maxBarThickness: 26 }] },
+      options: { indexAxis: 'y', maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: x => ` ${eur(x.parsed.x)}` } } }, scales: { x: axisEur(), y: { grid: { display: false } } } }
+    }));
+    return cardHtml(title, senseLbl, `<div class="chart-box" style="height:${Math.max(160, 44 * entries.length + 40)}px"><canvas id="${cid}"></canvas></div>`);
+  }
+  const endM = R.end.slice(0, 7), months = [...Array(12)].map((_, i) => shiftMonth(endM, i - 11));
+  const perMonth = months.map(monthItems);
+  const line = c.type === 'line12';
+  after.push(() => chart(cid, {
+    type: line ? 'line' : 'bar',
+    data: {
+      labels: months.map(monthShort),
+      datasets: ids.map(id => ({
+        label: catName(id), data: perMonth.map(it => sumBy(it.filter(t => match(t, id)))),
+        borderColor: catColor(id), backgroundColor: catColor(id),
+        ...(line ? { tension: .3, pointRadius: 3, borderWidth: 2 } : { borderRadius: 4, maxBarThickness: 18 })
+      }))
+    },
+    options: { maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: legendBottom, tooltip: tooltipEur }, scales: { x: { grid: { display: false } }, y: axisEur() } }
+  }));
+  return cardHtml(title, `${senseLbl} · jusqu'à ${monthLabel(endM).toLowerCase()}`, `<div class="chart-box"><canvas id="${cid}"></canvas></div>`);
+}
+
+function chartModal(existing) {
+  const c = existing || { title: '', type: 'pie', sense: 'out', src: 'both', span: 4, items: [] };
+  const opts = (map, cur) => Object.entries(map).map(([v, l]) => `<option value="${v}" ${String(cur) === v ? 'selected' : ''}>${l}</option>`).join('');
+  modal({
+    title: existing ? 'Modifier le graphique' : 'Nouveau graphique',
+    submit: existing ? 'Enregistrer' : 'Ajouter',
+    body: `<label class="f">Titre<input name="title" value="${esc(c.title)}" placeholder="ex. Sorties loisirs"></label>
+      <div class="row"><label class="f">Type<select name="type">${opts(CHART_TYPES, c.type)}</select></label>
+        <label class="f">Taille<select name="span">${opts(CHART_SPANS, c.span)}</select></label></div>
+      <div class="row"><label class="f">Montants<select name="sense">${opts({ out: 'Sorties', in: 'Entrées' }, c.sense)}</select></label>
+        <label class="f">Compter une transaction si c'est sa…<select name="src">${opts(CHART_SRC, c.src)}</select></label></div>
+      ${catChips('items', c.items, 'Catégories et étiquettes à afficher')}`,
+    onSubmit: form => {
+      const items = Array.from(form.querySelectorAll('input[name="items"]:checked'), i => i.value);
+      if (!items.length) return 'Choisir au moins une catégorie ou étiquette.';
+      const data = { title: form.title.value.trim() || 'Graphique', type: form.type.value, span: +form.span.value, sense: form.sense.value, src: form.src.value, items };
+      if (existing) Object.assign(existing, data);
+      else {
+        const id = 'cc-' + uid();
+        D.settings.charts = [...customCharts(), { id, ...data }];
+        const L = layout().filter(b => b.id !== id);
+        L.splice(L.findIndex(b => b.id === 'kpis') + 1, 0, { id, hidden: false }); // juste sous les indicateurs
+        D.settings.layout = L;
+      }
+      stampSettings(); persist(); renderDashboard();
+      toast(existing ? 'Graphique modifié' : 'Graphique ajouté');
+    }
+  });
 }
 
 function renderDashboard() {
@@ -563,9 +636,10 @@ function renderDashboard() {
   $('#dashGrid').classList.toggle('editing', editing);
   $('#editBanner').hidden = !editing;
   $('#dashGrid').innerHTML = L.filter(b => editing || !b.hidden).map(b => {
-    const def = BLOCKS[b.id];
-    const inner = b.hidden ? `<div class="card off-card">${def.title}</div>` : B[b.id]();
-    const bar = editing ? `<div class="edit-bar">${ic('grip')}${def.title}<button data-toggle-block="${b.id}" title="${b.hidden ? 'Afficher' : 'Masquer'}">${ic(b.hidden ? 'eyeOff' : 'eye')}</button></div>` : '';
+    const def = blockDef(b.id);
+    const inner = b.hidden ? `<div class="card off-card">${def.title}</div>` : def.custom ? customBlock(def.custom, st, after) : B[b.id]();
+    const own = def.custom ? `<button data-edit-chart="${b.id}" title="Modifier">${ic('edit')}</button><button data-del-chart="${b.id}" title="Supprimer">${ic('trash')}</button>` : '';
+    const bar = editing ? `<div class="edit-bar">${ic('grip')}${def.title}${own}<button data-toggle-block="${b.id}" title="${b.hidden ? 'Afficher' : 'Masquer'}">${ic(b.hidden ? 'eyeOff' : 'eye')}</button></div>` : '';
     return `<div class="block span-${def.span} ${b.hidden ? 'off' : ''}" data-block="${b.id}" ${editing ? 'draggable="true"' : ''}>${bar}${inner}</div>`;
   }).join('');
   after.forEach(f => f());
@@ -831,11 +905,12 @@ const confirmModal = (title, text, action = 'Supprimer') => new Promise(res => {
 });
 
 const catOptions = (type, selected) => catsOf(type).map(c => `<option value="${c.id}" ${c.id === selected ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
-const tagPicker = selected => {
+const catChips = (name, selected, label) => {
   const list = [...new Map([...catsOf('out'), ...catsOf('in')].map(c => [c.id, c])).values()];
-  return `<div class="f"><span>Étiquettes <small class="mut">(plusieurs possibles)</small></span><div class="tag-pick">${list.map(c =>
-    `<label class="tag lbl pick"><input type="checkbox" name="tags" value="${c.id}" ${selected.includes(c.id) ? 'checked' : ''}><i class="dot" style="background:${c.color}"></i>${esc(c.name)}</label>`).join('') || '<span class="mut">Aucune catégorie</span>'}</div></div>`;
+  return `<div class="f"><span>${label} <small class="mut">(plusieurs possibles)</small></span><div class="tag-pick">${list.map(c =>
+    `<label class="tag lbl pick"><input type="checkbox" name="${name}" value="${c.id}" ${selected.includes(c.id) ? 'checked' : ''}><i class="dot" style="background:${c.color}"></i>${esc(c.name)}</label>`).join('') || '<span class="mut">Aucune catégorie</span>'}</div></div>`;
 };
+const tagPicker = selected => catChips('tags', selected, 'Étiquettes');
 // Masque l'étiquette correspondant à la catégorie choisie ; à rappeler quand la liste des catégories change.
 const bindTagPick = form => {
   const upd = () => form.querySelectorAll('input[name="tags"]').forEach(i => {
@@ -1743,6 +1818,7 @@ function bindEvents() {
   $('#cStart').onchange = onCustom; $('#cEnd').onchange = onCustom;
   $('#editLayout').onclick = () => setEditing(!editing);
   $('#doneLayout').onclick = () => setEditing(false);
+  $('#addChart').onclick = () => chartModal();
   $('#resetLayout').onclick = () => { D.settings.layout = defaultLayout(); stampSettings(); persist(); renderDashboard(); };
   bindLayoutDnd();
   $('#quickAdd').onclick = () => ({ subs: () => subModal(), cats: () => catModal(), goals: () => goalModal() }[page] || (() => txModal(null, txType === 'in' ? 'in' : 'out')))();
@@ -1851,10 +1927,19 @@ function bindEvents() {
   $$('#txFilterType button').forEach(b => b.onclick = () => { txType = b.dataset.v; $$('#txFilterType button').forEach(x => x.classList.toggle('on', x === b)); renderTransactions(); });
 
   document.addEventListener('click', async e => {
-    const el = e.target.closest('[data-toggle-block],[data-cat-detail],[data-new-cat],[data-edit-tx],[data-del-tx],[data-edit-sub],[data-del-sub],[data-toggle-sub],[data-edit-cat],[data-del-cat],[data-edit-goal],[data-del-goal],[data-goal-move]');
+    const el = e.target.closest('[data-edit-chart],[data-del-chart],[data-toggle-block],[data-cat-detail],[data-new-cat],[data-edit-tx],[data-del-tx],[data-edit-sub],[data-del-sub],[data-toggle-sub],[data-edit-cat],[data-del-cat],[data-edit-goal],[data-del-goal],[data-goal-move]');
     if (!el || $('#app').hidden) return;
     const d = el.dataset;
-    if (d.toggleBlock) {
+    if (d.editChart) chartModal(customCharts().find(c => c.id === d.editChart));
+    else if (d.delChart) {
+      const c = customCharts().find(x => x.id === d.delChart);
+      if (await confirmModal('Supprimer le graphique', `Suppression du graphique « ${esc(c.title)} ».`)) {
+        D.settings.charts = customCharts().filter(x => x.id !== c.id);
+        D.settings.layout = layout().filter(b => b.id !== c.id);
+        stampSettings(); persist(); renderDashboard();
+      }
+    }
+    else if (d.toggleBlock) {
       const L = layout(), b = L.find(x => x.id === d.toggleBlock); b.hidden = !b.hidden;
       D.settings.layout = L; stampSettings(); persist(); renderDashboard();
     }
