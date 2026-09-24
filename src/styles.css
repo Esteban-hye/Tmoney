@@ -265,3 +265,8 @@ label.check input { width: auto; }
 .toast { display: flex; align-items: center; gap: 14px; }
 .toast button { background: none; border: 0; color: var(--acc); font-weight: 600; cursor: pointer; padding: 0; }
 :root[data-theme="dark"] .toast button { color: #8bb6ff; }
+.series { display: flex; flex-direction: column; gap: 10px; }
+.serie { padding: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--card-2); }
+.serie input[type="color"] { width: 44px; height: 36px; padding: 2px; }
+.chart-values { max-height: 240px; overflow-y: auto; margin-top: 12px; font-size: 13px; }
+.chart-values tr.tot td { border-top: 2px solid var(--bd); }

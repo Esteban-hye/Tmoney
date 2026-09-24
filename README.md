@@ -7,7 +7,7 @@
 
 ## Fonctionnalités
 
-- **Tableau de bord personnalisable** (glisser-déposer, blocs masquables, **graphiques personnalisés** : camembert, barres ou courbes sur les catégories et étiquettes de son choix) : solde reporté d'un mois à l'autre, entrées, sorties, résultat, taux d'épargne
+- **Tableau de bord personnalisable** (glisser-déposer, blocs masquables, **graphiques personnalisés** : camembert, totaux, barres ou courbes ; séries libres (catégorie principale + étiquettes) ; entrées, sorties ou les deux ; période affichée, X derniers mois ou tout l'historique ; cumul et tableau des valeurs) : solde reporté d'un mois à l'autre, entrées, sorties, résultat, taux d'épargne
 - **Périodes** : semaine, mois, année ou dates libres
 - **Graphiques** : entrées/sorties sur 12 mois, sorties cumulées, évolution du solde, calendrier des sorties, jours de la semaine, 6 répartitions en camembert, comparaison de deux mois
 - **Transactions** : catégorie + plusieurs étiquettes, description, notes, saisie en série, recherche sur tout l'historique
