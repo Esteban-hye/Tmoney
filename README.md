@@ -1,7 +1,7 @@
 <p align="center"><img src="build/icon.png" width="96" alt="Tmoney"></p>
 
 <h1 align="center">Tmoney</h1>
-<p align="center">Application Windows de gestion de budget personnel · <b>version alpha</b></p>
+<p align="center">Application Windows et macOS de gestion de budget personnel · <b>version alpha</b></p>
 
 ---
 
@@ -21,9 +21,23 @@
 
 ## Installation (utilisateur)
 
+### Windows
+
 1. Télécharger `Tmoney-Setup-x.x.x.exe` depuis la page **Releases**
 2. Lancer l'installateur
 3. Si Windows affiche « Windows a protégé votre ordinateur » : **Informations complémentaires → Exécuter quand même** (l'application n'est pas signée numériquement)
+
+### macOS
+
+1. Télécharger `Tmoney-x.x.x-mac.dmg` depuis la page **Releases**, l'ouvrir et glisser Tmoney dans **Applications**
+2. L'application n'est pas signée par Apple : au premier lancement, macOS la bloque. Ouvrir le **Terminal** et taper :
+   ```bash
+   xattr -cr /Applications/Tmoney.app
+   ```
+   puis relancer Tmoney (ou : Réglages Système → Confidentialité et sécurité → **Ouvrir quand même**)
+3. Les mises à jour ne s'installent pas toutes seules sur Mac : Tmoney signale la nouvelle version et ouvre la page de téléchargement
+
+Sur Mac, les données sont dans `~/Library/Application Support/Tmoney/`. Un coffre créé sur un autre ordinateur ne peut pas être ouvert tel quel : utiliser la synchronisation.
 
 Les données sont stockées uniquement sur le PC, dans `%APPDATA%\Tmoney\tmoney.vault`. Rien n'est envoyé sur internet.
 
@@ -39,6 +53,7 @@ npm start            # lancer en mode développement
 npm run setup        # créer l'installateur dans dist/
 npm run dist         # créer la version décompressée dans dist/win-unpacked
 npm run install-app  # installer dist/win-unpacked sur ce PC + raccourcis
+npm run mac          # créer le .dmg (sur un Mac uniquement, sinon via GitHub Actions)
 npm run icon         # régénérer build/icon.png depuis build/icon.svg
 ```
 
@@ -58,6 +73,6 @@ scripts/         génération de l'icône, installation locale
 
 | Raccourci | Action |
 |-----------|--------|
-| Ctrl+N | Nouvel élément (transaction, mensualité…) |
-| Ctrl+F | Recherche dans tout l'historique |
-| Ctrl+D | Mode discret |
+| Ctrl+N (⌘N sur Mac) | Nouvel élément (transaction, mensualité…) |
+| Ctrl+F (⌘F sur Mac) | Recherche dans tout l'historique |
+| Ctrl+D (⌘D sur Mac) | Mode discret |

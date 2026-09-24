@@ -1208,7 +1208,7 @@ async function exportPdf() {
     const rules = catsOf('out').flatMap(c => ruleStatus(c, st).map(x => ({ c, ...x })));
     const nb = elapsedDays(r);
     const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><style>
-      body{font-family:"Segoe UI",sans-serif;color:#0f172a;margin:0;font-size:12px}
+      body{font-family:"Segoe UI",system-ui,sans-serif;color:#0f172a;margin:0;font-size:12px}
       h1{font-size:22px;margin:0}h2{font-size:14px;margin:22px 0 8px;color:#1e5fd1;border-bottom:1px solid #dfe5ef;padding-bottom:4px}
       .head{display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #2f7cf6;padding-bottom:10px}
       .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}.k{background:#f3f6fb;border-radius:8px;padding:10px}.k small{color:#64748b}.k b{display:block;font-size:17px;margin-top:3px}
@@ -1750,13 +1750,19 @@ function bindEvents() {
     available: i => `Version ${i.version} disponible, téléchargement…`,
     downloading: i => `Téléchargement : ${i.percent} %`,
     downloaded: i => `Version ${i.version} téléchargée`,
+    manual: i => `Version ${i.version} disponible`,
     error: i => `Erreur : ${i.message}`
   };
   api.onUpdate(({ status, info }) => {
     const el = $('#updDetail');
     if (el) el.textContent = (UPD[status] || (() => status))(info || {});
-    $('#updInstallRow').hidden = status !== 'downloaded';
+    $('#updInstallRow').hidden = status !== 'downloaded' && status !== 'manual';
     if (status === 'downloaded') toast('Mise à jour prête à installer');
+    if (status === 'manual') {
+      $('#updInstallRow small').textContent = "Télécharger le nouveau .dmg et remplacer l'application";
+      $('#updInstall').textContent = 'Télécharger';
+      toast('Nouvelle version disponible');
+    }
   });
   $('#updCheck').onclick = async () => {
     $('#updDetail').textContent = 'Recherche en cours…';
@@ -1874,10 +1880,10 @@ function bindEvents() {
 
   document.addEventListener('keydown', e => {
     if ($('#app').hidden || $('.modal-bg')) return;
-    const k = e.key.toLowerCase();
-    if (e.ctrlKey && k === 'n') { e.preventDefault(); $('#quickAdd').click(); }
-    if (e.ctrlKey && k === 'f') { e.preventDefault(); go('transactions'); $('#txScope').value = 'all'; renderTransactions(); $('#txSearch').focus(); }
-    if (e.ctrlKey && k === 'd') { e.preventDefault(); $('#discreetToggle').click(); }
+    const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
+    if (mod && k === 'n') { e.preventDefault(); $('#quickAdd').click(); }
+    if (mod && k === 'f') { e.preventDefault(); go('transactions'); $('#txScope').value = 'all'; renderTransactions(); $('#txSearch').focus(); }
+    if (mod && k === 'd') { e.preventDefault(); $('#discreetToggle').click(); }
   });
 }
 

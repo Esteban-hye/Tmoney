@@ -1,10 +1,12 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, safeStorage } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, dialog, shell, clipboard, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
 const sync = require('./sync');
+
+const MAC = process.platform === 'darwin';
 
 const VAULT = () => path.join(app.getPath('userData'), 'tmoney.vault');
 const DEVICE = () => path.join(app.getPath('userData'), 'device.key');
@@ -23,11 +25,17 @@ function createWindow() {
     autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
   });
-  win.removeMenu();
+  if (!MAC) win.removeMenu();
   win.loadFile(path.join(__dirname, 'src', 'index.html'));
 }
 
-app.setAppUserModelId('com.tmoney.app');
+if (!MAC) app.setAppUserModelId('com.tmoney.app');
+// Sur macOS, sans menu d'application, Cmd+C / Cmd+V / Cmd+Q ne fonctionnent pas.
+if (MAC) Menu.setApplicationMenu(Menu.buildFromTemplate([
+  { role: 'appMenu', label: 'Tmoney' },
+  { role: 'editMenu', label: 'Édition' },
+  { role: 'windowMenu', label: 'Fenêtre' }
+]));
 if (!app.requestSingleInstanceLock()) app.quit();
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
 app.whenReady().then(() => {
@@ -35,9 +43,10 @@ app.whenReady().then(() => {
   if (app.isPackaged && updatesConfigured()) setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 4000);
 });
 app.on('window-all-closed', () => app.quit());
+app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 
 // ---- Coffre chiffré (AES-256-GCM, clé dérivée du PIN + secret propre à la machine) ----
-// Le secret machine est protégé par Windows (DPAPI) : un coffre copié sur un autre PC
+// Le secret machine est protégé par le système (DPAPI sous Windows, Trousseau sous macOS) : un coffre copié sur un autre PC
 // reste illisible, même avec le bon code PIN.
 let bound = false;
 function deviceSecret() {
@@ -178,11 +187,13 @@ ipcMain.handle('import:xlsx', async () => {
 const updatesConfigured = () => {
   try { return app.isPackaged && fs.existsSync(path.join(process.resourcesPath, 'app-update.yml')); } catch { return false; }
 };
-autoUpdater.autoDownload = true;
+// macOS refuse d'installer une mise à jour non signée par un compte Apple Developer :
+// on signale seulement la nouvelle version et on ouvre la page de téléchargement.
+autoUpdater.autoDownload = !MAC;
 autoUpdater.autoInstallOnAppQuit = true;
 const sendUpdate = (status, info) => { try { win?.webContents.send('update:status', { status, info }); } catch {} };
 autoUpdater.on('checking-for-update', () => sendUpdate('checking'));
-autoUpdater.on('update-available', i => sendUpdate('available', { version: i.version }));
+autoUpdater.on('update-available', i => sendUpdate(MAC ? 'manual' : 'available', { version: i.version }));
 autoUpdater.on('update-not-available', () => sendUpdate('none'));
 autoUpdater.on('download-progress', p => sendUpdate('downloading', { percent: Math.round(p.percent) }));
 autoUpdater.on('update-downloaded', i => sendUpdate('downloaded', { version: i.version }));
@@ -194,7 +205,10 @@ ipcMain.handle('update:check', async (_e, silent) => {
   try { await autoUpdater.checkForUpdates(); } catch (e) { sendUpdate('error', { message: String(e?.message || e) }); }
   return { configured: true, version: app.getVersion() };
 });
-ipcMain.handle('update:install', () => { autoUpdater.quitAndInstall(); });
+ipcMain.handle('update:install', () => {
+  if (MAC) shell.openExternal('https://github.com/Esteban-hye/Tmoney/releases/latest');
+  else autoUpdater.quitAndInstall();
+});
 ipcMain.handle('app:version', () => app.getVersion());
 
 // ---- Synchronisation ----

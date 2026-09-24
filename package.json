@@ -1,7 +1,7 @@
 {
   "name": "tmoney",
   "productName": "Tmoney",
-  "version": "0.7.0-alpha",
+  "version": "0.8.0-alpha",
   "description": "Tmoney - gestion de budget",
   "author": "Esteban",
   "main": "main.js",
@@ -11,6 +11,7 @@
     "icon": "electron scripts/make-icon.js",
     "dist": "electron-builder --win dir",
     "setup": "electron-builder --win nsis",
+    "mac": "electron-builder --mac --publish never",
     "install-app": "powershell -ExecutionPolicy Bypass -File scripts/install.ps1"
   },
   "build": {
@@ -30,6 +31,30 @@
     "win": {
       "target": "dir",
       "icon": "build/icon.png"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.finance",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "artifactName": "Tmoney-${version}-mac.${ext}"
+    },
+    "dmg": {
+      "title": "Tmoney ${version}"
     },
     "publish": {
       "provider": "github",
