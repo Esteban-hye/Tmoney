@@ -267,7 +267,7 @@ label.check input { width: auto; }
 :root[data-theme="dark"] .toast button { color: #8bb6ff; }
 .series { display: flex; flex-direction: column; gap: 10px; }
 .serie { padding: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--card-2); }
-.serie input[type="color"] { width: 44px; height: 36px; padding: 2px; }
+.serie input[type="color"], .modal input[type="color"][name] { width: 44px; height: 36px; padding: 2px; }
 .chart-values { max-height: 240px; overflow-y: auto; margin-top: 12px; font-size: 13px; }
 .chart-values tr.tot td { border-top: 2px solid var(--bd); }
 .cc-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
@@ -275,3 +275,14 @@ label.check input { width: auto; }
 .cc-kpi .lbl { color: var(--mut); font-size: 12px; }
 .cc-kpi .val { font-size: 21px; font-weight: 700; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
 .cc-kpi .sub { color: var(--mut); font-size: 12px; }
+.subnav { display: flex; flex-direction: column; gap: 1px; margin: 0 0 6px 24px; padding-left: 8px; border-left: 1px solid var(--bd); }
+.subnav button { padding: 6px 10px; font-size: 13px; }
+.edit-banner { flex-wrap: wrap; }
+.edit-banner select.sm { width: auto; padding: 5px 8px; font-size: 13px; }
+.budget-tx { max-height: 280px; overflow-y: auto; border: 1px solid var(--bd); border-radius: 10px; }
+.btx { display: grid; grid-template-columns: 22px 60px 1fr auto 90px; align-items: center; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--bd); cursor: pointer; font-size: 13px; }
+.btx:last-child { border-bottom: 0; }
+.btx input { width: auto; }
+.btx .d { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btx .num.out { text-align: right; }
+.btx.on { background: var(--acc-soft); }

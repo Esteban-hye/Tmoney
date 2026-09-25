@@ -88,9 +88,9 @@ function toast(msg, undo) {
 }
 
 // ================= Données =================
-const emptyData = () => ({ version: 4, settings: { theme: 'dark', discreet: false, serial: false, layout: null, opening: { amount: 0, date: '' }, autoLock: 0, u: 0 }, cats: [], tx: [], subs: [], goals: [], tomb: {}, dirty: {}, sync: null, server: null });
+const emptyData = () => ({ version: 4, settings: { theme: 'dark', discreet: false, serial: false, layout: null, opening: { amount: 0, date: '' }, autoLock: 0, u: 0 }, cats: [], tx: [], subs: [], goals: [], budgets: [], tomb: {}, dirty: {}, sync: null, server: null });
 // Horodate un enregistrement : sert à départager les modifications entre PC (le plus récent gagne)
-const SYNC_ARRAYS = { tx: 'tx', cat: 'cats', sub: 'subs', goal: 'goals' };
+const SYNC_ARRAYS = { tx: 'tx', cat: 'cats', sub: 'subs', goal: 'goals', budget: 'budgets' };
 const markDirty = id => { if (D.dirty) D.dirty[id] = 1; };
 // Toujours strictement postérieur à la version connue : une modification locale gagne même si
 // l'horloge de l'autre PC avance.
@@ -112,7 +112,8 @@ function migrate(d) {
   if (!('sync' in d)) d.sync = null;
   if (!('server' in d)) d.server = null;
   const now = Date.now();
-  for (const arr of [d.tx, d.cats, d.subs, d.goals]) for (const o of arr || []) if (!o.u) o.u = now;
+  d.budgets = d.budgets || [];
+  for (const arr of [d.tx, d.cats, d.subs, d.goals, d.budgets]) for (const o of arr || []) if (!o.u) o.u = now;
   if (!d.settings.u) d.settings.u = now;
   for (const s of d.subs || []) {
     if (!s.versions || !s.versions.length) s.versions = [{ from: s.start, amount: s.amount, cat: s.cat, tag: s.tag, day: s.day, name: s.name, notes: s.notes || '', type: s.type }];
@@ -261,16 +262,17 @@ const axisEur = () => ({ grid: { color: css('--bd') }, ticks: { callback: v => e
 const legendBottom = { position: 'bottom', labels: { boxWidth: 10, boxHeight: 10 } };
 
 // ================= Navigation =================
-const TITLES = { dashboard: 'Tableau de bord', transactions: 'Transactions', subs: 'Mensualités', cats: 'Catégories', goals: "Objectifs d'épargne", settings: 'Réglages' };
+const TITLES = { dashboard: 'Tableau de bord', transactions: 'Transactions', subs: 'Mensualités', cats: 'Catégories', goals: "Objectifs d'épargne", budgets: 'Budgets', settings: 'Réglages' };
 function go(p) {
   if (editing && p !== 'dashboard') setEditing(false);
   page = p;
   $$('#nav button[data-page]').forEach(b => b.classList.toggle('on', b.dataset.page === p));
   $$('section.page').forEach(s => { s.hidden = s.id !== 'page-' + p; });
   $('#pageTitle').textContent = TITLES[p];
-  $('#periodBar').hidden = !['dashboard', 'transactions', 'cats'].includes(p);
+  $('#periodBar').hidden = !['dashboard', 'transactions', 'cats', 'budgets'].includes(p);
+  renderDashNav();
   $('#editLayout').hidden = p !== 'dashboard';
-  const labels = { subs: 'Mensualité', cats: 'Catégorie', goals: 'Objectif', settings: null };
+  const labels = { subs: 'Mensualité', cats: 'Catégorie', goals: 'Objectif', budgets: 'Budget', settings: null };
   const lbl = p in labels ? labels[p] : 'Transaction';
   $('#quickAdd').hidden = !lbl;
   if (lbl) $('#quickAdd').innerHTML = ic('plus') + lbl;
@@ -288,7 +290,7 @@ function renderPeriodBar() {
 function render() {
   renderPeriodBar();
   applyTheme();
-  ({ dashboard: renderDashboard, transactions: renderTransactions, subs: renderSubs, cats: renderCats, goals: renderGoals, settings: renderSettings })[page]();
+  ({ dashboard: renderDashboard, transactions: renderTransactions, subs: renderSubs, cats: renderCats, goals: renderGoals, budgets: renderBudgets, settings: renderSettings })[page]();
 }
 
 // ================= Tableau de bord : blocs =================
@@ -322,7 +324,8 @@ const CHART_TYPES = {
   compare: 'Comparaison avec la période précédente (cumulé)', weekday: 'Jours de la semaine', calendar: 'Calendrier (1re série)'
 };
 const CHART_TIMES = { period: 'Période affichée', months: 'Derniers mois', all: 'Global (tout l\'historique)' };
-const CHART_SENSES = { out: 'Sorties', in: 'Entrées', both: 'Entrées et sorties (séparées)' };
+const CHART_SENSES = { out: 'Sorties', in: 'Entrées', both: 'Entrées et sorties (séparées)', net: 'Résultat (entrées − sorties)', bal: 'Solde (cumulé depuis le début)' };
+const SIGNED_TYPES = ['kpi', 'bar', 'line']; // types qui acceptent Résultat et Solde
 const CHART_SPANS = { 4: 'Petit (1/3)', 6: 'Moyen (1/2)', 8: 'Grand (2/3)', 12: 'Pleine largeur' };
 // Anciens formats → format actuel : 0.9.0 (type pie/hbar/bars12/line12 + "items"), 0.10.0 (sens au niveau du graphique).
 function chartCfg(c) {
@@ -337,12 +340,68 @@ function chartCfg(c) {
 }
 const customCharts = () => D.settings.charts || [];
 const blockDef = id => BLOCKS[id] || (c => c && { title: esc(c.title), span: c.span, custom: c })(customCharts().find(c => c.id === id));
-const allBlockIds = () => [...Object.keys(BLOCKS), ...customCharts().map(c => c.id)];
+// Tableaux de bord : le principal (D.settings.layout) + des secondaires (D.settings.dashboards : { id, name, layout }).
+// Un graphique perso appartient à un tableau (c.dash ; vide = principal). Un secondaire ne contient d'office
+// que ses graphiques ; les blocs intégrés s'y ajoutent à la demande.
+let curDash = 'main';
+const dashboards = () => D.settings.dashboards || [];
+const curDashObj = () => dashboards().find(d => d.id === curDash);
+const chartsOfDash = id => customCharts().filter(c => (c.dash || 'main') === id);
+const allBlockIds = () => curDash === 'main' ? [...Object.keys(BLOCKS), ...chartsOfDash('main').map(c => c.id)] : chartsOfDash(curDash).map(c => c.id);
 const defaultLayout = () => allBlockIds().map(id => ({ id, hidden: false }));
 function layout() {
-  const saved = (D.settings.layout || []).filter(b => blockDef(b.id));
-  for (const id of allBlockIds()) if (!saved.some(b => b.id === id)) saved.push({ id, hidden: false });
+  if (curDash !== 'main' && !curDashObj()) curDash = 'main';
+  const mine = new Set(allBlockIds());
+  const src = curDash === 'main' ? D.settings.layout : curDashObj().layout;
+  const saved = (src || []).filter((b, i, arr) => blockDef(b.id) && (BLOCKS[b.id] || mine.has(b.id)) && arr.findIndex(x => x.id === b.id) === i);
+  for (const id of mine) if (!saved.some(b => b.id === id)) saved.push({ id, hidden: false });
   return saved;
+}
+function saveLayout(L) { if (curDash === 'main') D.settings.layout = L; else curDashObj().layout = L; }
+function renderDashNav() {
+  const nav = $('#dashNav');
+  if (!nav) return;
+  nav.hidden = page !== 'dashboard' || !dashboards().length;
+  nav.innerHTML = [{ id: 'main', name: 'Principal' }, ...dashboards()].map(d => `<button data-dash="${d.id}" class="${d.id === curDash ? 'on' : ''}">${esc(d.name)}</button>`).join('');
+}
+function openDash(id) {
+  curDash = id;
+  if (page !== 'dashboard') go('dashboard'); else { $('#content').scrollTop = 0; renderDashboard(); }
+}
+function dashNameModal(existing) {
+  modal({
+    title: existing ? 'Renommer le tableau' : 'Nouveau tableau de bord',
+    submit: existing ? 'Renommer' : 'Créer',
+    body: `<label class="f">Nom<input name="name" value="${esc(existing?.name || '')}" placeholder="ex. Prêts, Vacances…"></label>`,
+    onSubmit: form => {
+      const name = form.name.value.trim();
+      if (!name) return 'Nom manquant.';
+      if (existing) existing.name = name;
+      else { const id = 'db-' + uid(); D.settings.dashboards = [...dashboards(), { id, name, layout: [] }]; curDash = id; }
+      stampSettings(); persist(); renderDashboard();
+      toast(existing ? 'Tableau renommé' : 'Tableau créé : ajoutez-y des graphiques');
+    }
+  });
+}
+async function dashAction(act) {
+  const list = dashboards(), i = list.findIndex(d => d.id === curDash), d = list[i];
+  if (act === 'new') return dashNameModal();
+  if (!d) return;
+  if (act === 'rename') return dashNameModal(d);
+  if (act === 'up' || act === 'down') {
+    const j = act === 'up' ? i - 1 : i + 1;
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    D.settings.dashboards = [...list];
+  }
+  if (act === 'del') {
+    const n = chartsOfDash(d.id).length;
+    if (!await confirmModal('Supprimer le tableau', `Suppression du tableau « ${esc(d.name)} »${n ? ` et de ses ${plural(n, 'graphique')}` : ''}.`)) return;
+    D.settings.charts = customCharts().filter(c => c.dash !== d.id);
+    D.settings.dashboards = list.filter(x => x.id !== d.id);
+    curDash = 'main';
+  }
+  stampSettings(); persist(); renderDashboard();
 }
 let editing = false;
 let cmpA = null, cmpB = null;
@@ -376,6 +435,7 @@ function pieBlock(id, sub, entries, centerLabel, after, title = BLOCKS[id]?.titl
 
 const seriesLabel = x => {
   if (x.name) return x.name;
+  if (!x.cat && !x.tags.length) return 'Toutes les transactions';
   const main = x.cat ? catName(x.cat) + (x.tags.includes(x.cat) ? ' (catégorie ou étiquette)' : '') : '';
   return [main, ...x.tags.filter(g => g !== x.cat).map(catName)].filter(Boolean).join(' + ') || 'Série';
 };
@@ -408,43 +468,60 @@ function chartRange(c) {
 function customBlock(raw, st, after) {
   const c = chartCfg(raw);
   const title = esc(c.title), cid = 'ch-' + c.id;
-  const series = (c.series || []).filter(x => (!x.cat || cat(x.cat)) && (x.cat || x.tags.length)).map(x => ({ ...x, tags: x.tags.filter(g => cat(g)) }));
+  const series = (c.series || []).filter(x => !x.cat || cat(x.cat)).map(x => ({ ...x, tags: (x.tags || []).filter(g => cat(g)) }));
   if (!series.length) return cardHtml(title, '', emptyHtml('Aucune série : cliquer sur « Personnaliser » puis sur le crayon'));
   // Couleur : choisie, sinon celle de la catégorie ou 1re étiquette, sinon la palette si déjà prise
   const used = new Set();
   series.forEach((x, i) => {
-    let col = x.color || catColor(x.cat || x.tags[0]);
+    let col = x.color || (x.cat || x.tags[0] ? catColor(x.cat || x.tags[0]) : PALETTE[i % PALETTE.length]);
     if (!x.color && used.has(col)) col = PALETTE.find(p => !used.has(p)) || PALETTE[i % PALETTE.length];
     used.add(col); x.col = col; x.label = seriesLabel(x);
   });
   // Jeux de données : une série "les deux" donne une ligne sorties + une ligne entrées (couleur éclaircie)
-  const sets = [];
+  let sets = [];
   for (const x of series) {
     for (const sn of x.sense === 'both' ? ['out', 'in'] : [x.sense || 'out']) {
-      const both = x.sense === 'both';
-      sets.push({ x, sn, label: x.label + (both ? (sn === 'in' ? ' · entrées' : ' · sorties') : ''), col: both && sn === 'in' ? hexMix(x.col, .45) : x.col, dash: both && sn === 'in' });
+      const both = x.sense === 'both', suffix = both ? (sn === 'in' ? ' · entrées' : ' · sorties') : sn === 'net' ? ' · résultat' : sn === 'bal' ? ' · solde' : '';
+      sets.push({ x, sn, label: x.label + suffix, col: both && sn === 'in' ? hexMix(x.col, .45) : x.col, dash: both && sn === 'in' });
     }
   }
+  if (!SIGNED_TYPES.includes(c.type)) sets = sets.filter(d => d.sn === 'out' || d.sn === 'in');
+  if (!sets.length) return cardHtml(title, '', emptyHtml('Résultat et Solde : seulement pour Indicateurs, Barres et Courbes'));
   const rg = chartRange(c);
   const itemsOf = r => itemsIn(r.start, r.end);
   const items = itemsOf(rg);
-  const pick = (arr, d) => arr.filter(t => t.type === d.sn && seriesMatch(t, d.x));
+  const flow = d => d.sn === 'out' || d.sn === 'in';
+  const pick = (arr, d) => arr.filter(t => (!flow(d) || t.type === d.sn) && seriesMatch(t, d.x));
+  const amt = (t, d) => (flow(d) ? t.amount : signOf(t));
+  // Solde d'une série à une date : tout l'historique (+ solde de départ si la série prend toutes les transactions)
+  const balAt = (d, date) => (!d.x.cat && !d.x.tags.length ? balanceAt(date) : sumBy(pick(itemsIn('0000-01-01', date), d), signOf));
+  const SN_LBL = { out: 'sorties', in: 'entrées', net: 'résultat', bal: 'solde' };
   const senses = [...new Set(sets.map(d => d.sn))];
-  const senseLbl = senses.length > 1 ? 'entrées et sorties' : senses[0] === 'in' ? 'entrées' : 'sorties';
+  const senseLbl = senses.length === 2 && senses.includes('out') && senses.includes('in') ? 'entrées et sorties' : senses.map(sn => SN_LBL[sn]).join(', ');
   const sub = [senseLbl, rg.label].filter(Boolean).join(' · ');
   const valTable = (head, rows) => c.values ? `<div class="table-wrap chart-values"><table><thead><tr>${head.map((h, i) => `<th class="${i ? 'r' : ''}">${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>` : '';
   const dot = d => `<i class="dot" style="background:${d.col}"></i> ${esc(d.label)}`;
 
   if (c.type === 'kpi') {
     const prevItems = rg.prev ? itemsOf(rg.prev) : null;
+    const today = todayStr(), balDate = rg.end > today && rg.start <= today ? today : rg.end;
     const tiles = sets.map(d => {
-      const list = pick(items, d), val = sumBy(list, t => t.amount);
-      let delta = '';
-      if (prevItems) {
-        const pv = sumBy(pick(prevItems, d), t => t.amount);
-        if (pv) { const v = (val - pv) / pv * 100, good = d.sn === 'in' ? v >= 0 : v <= 0; delta = `<span class="delta" style="color:var(${good ? '--in' : '--out'})">${v >= 0 ? '+' : ''}${pct(v, 0)}</span> vs ${rg.prevLabel} · `; }
+      const list = pick(items, d);
+      let val, delta = '';
+      if (d.sn === 'bal') {
+        val = balAt(d, balDate);
+        if (rg.prev) { const dv = val - balAt(d, rg.prev.end); delta = `<span class="delta" style="color:var(${dv >= 0 ? '--in' : '--out'})">${signed(dv)}</span> vs fin ${rg.prevLabel} · `; }
+      } else {
+        val = sumBy(list, t => amt(t, d));
+        if (prevItems) {
+          const pv = sumBy(pick(prevItems, d), t => amt(t, d));
+          if (d.sn === 'net') { const dv = val - pv; delta = `<span class="delta" style="color:var(${dv >= 0 ? '--in' : '--out'})">${signed(dv)}</span> vs ${rg.prevLabel} · `; }
+          else if (pv) { const v = (val - pv) / pv * 100, good = d.sn === 'in' ? v >= 0 : v <= 0; delta = `<span class="delta" style="color:var(${good ? '--in' : '--out'})">${v >= 0 ? '+' : ''}${pct(v, 0)}</span> vs ${rg.prevLabel} · `; }
+        }
       }
-      return `<div class="cc-kpi" style="border-left-color:${d.col}"><div class="lbl">${esc(d.label)}</div><div class="val ${d.sn}">${eur(val)}</div><div class="sub">${delta}${plural(list.length, 'transaction')}</div></div>`;
+      const cls = flow(d) ? d.sn : val >= 0 ? 'in' : 'out';
+      const extra = d.sn === 'bal' ? `au ${fmtDate(balDate)}` : plural(list.length, 'transaction');
+      return `<div class="cc-kpi" style="border-left-color:${d.col}"><div class="lbl">${esc(d.label)}</div><div class="val ${cls}">${flow(d) ? eur(val) : signed(val)}</div><div class="sub">${delta}${extra}</div></div>`;
     }).join('');
     return cardHtml(title, sub, `<div class="cc-kpis">${tiles}</div>`);
   }
@@ -522,7 +599,8 @@ function customBlock(raw, st, after) {
   const idx = new Map(keys.map((k, i) => [k, i]));
   const data = sets.map(d => {
     const v = Array(keys.length).fill(0);
-    for (const t of pick(items, d)) { const i = idx.get(byDay ? t.date : t.date.slice(0, 7)); if (i != null) v[i] += t.amount; }
+    for (const t of pick(items, d)) { const i = idx.get(byDay ? t.date : t.date.slice(0, 7)); if (i != null) v[i] += amt(t, d); }
+    if (d.sn === 'bal') { let acc = balAt(d, addDays(rg.start, -1)); return v.map(n => (acc += n)); }
     if (c.cumul) { let acc = 0; return v.map(n => (acc += n)); }
     return v;
   });
@@ -561,7 +639,7 @@ function chartModal(existing) {
         <button type="button" class="icon-btn del" data-serie-del title="Retirer cette série" style="align-self:flex-end">${ic('trash')}</button>
       </div>
       ${catChips('stags-' + k, x.tags || [], 'Étiquettes (toutes requises)')}
-      <div class="mut" style="font-size:12px">Astuce : cocher aussi la catégorie principale dans les étiquettes = transactions où elle est catégorie principale <b>ou</b> étiquette.</div>
+      <div class="mut" style="font-size:12px">Astuces : cocher aussi la catégorie principale dans les étiquettes = transactions où elle est catégorie principale <b>ou</b> étiquette. Ni catégorie ni étiquette = toutes les transactions.</div>
     </div>`;
   };
   modal({
@@ -609,7 +687,7 @@ function chartModal(existing) {
         color: el.querySelector('[name="scolor"]').dataset.auto ? '' : el.querySelector('[name="scolor"]').value
       }));
       if (!series.length) return 'Ajouter au moins une série.';
-      if (series.some(x => !x.cat && !x.tags.length)) return 'Chaque série sans catégorie principale doit avoir au moins une étiquette.';
+      if (!SIGNED_TYPES.includes(form.type.value) && series.some(x => x.sense === 'net' || x.sense === 'bal')) return 'Résultat et Solde : seulement pour les types Indicateurs, Barres et Courbes.';
       const months = Math.min(120, Math.max(1, +form.months.value || 12));
       const data = {
         title: form.title.value.trim() || 'Graphique', type: form.type.value, span: +form.span.value,
@@ -621,10 +699,10 @@ function chartModal(existing) {
         Object.assign(existing, data);
       } else {
         const id = 'cc-' + uid();
-        D.settings.charts = [...customCharts(), { id, ...data }];
+        D.settings.charts = [...customCharts(), { id, ...data, ...(curDash !== 'main' ? { dash: curDash } : {}) }];
         const L = layout().filter(b => b.id !== id);
-        L.splice(L.findIndex(b => b.id === 'kpis') + 1, 0, { id, hidden: false }); // juste sous les indicateurs
-        D.settings.layout = L;
+        L.splice(curDash === 'main' ? L.findIndex(b => b.id === 'kpis') + 1 : 0, 0, { id, hidden: false }); // principal : sous les indicateurs
+        saveLayout(L);
       }
       stampSettings(); persist(); renderDashboard();
       toast(existing ? 'Graphique modifié' : 'Graphique ajouté');
@@ -846,13 +924,25 @@ function renderDashboard() {
   B.lastIn = () => cardHtml(BLOCKS.lastIn.title, '', mini(st.ins, 'in'));
   B.lastOut = () => cardHtml(BLOCKS.lastOut.title, '', mini(st.outs, 'out'));
 
-  const L = layout();
+  const L = layout(), sec = curDash !== 'main', dObj = curDashObj();
+  $('#pageTitle').textContent = sec ? dObj.name : TITLES.dashboard;
+  renderDashNav();
   $('#dashGrid').classList.toggle('editing', editing);
   $('#editBanner').hidden = !editing;
-  $('#dashGrid').innerHTML = L.filter(b => editing || !b.hidden).map(b => {
+  $$('[data-dash-sec]').forEach(el => { el.hidden = !sec; });
+  if (sec) {
+    const i = dashboards().indexOf(dObj);
+    $('[data-dash-act="up"]').disabled = i <= 0;
+    $('[data-dash-act="down"]').disabled = i >= dashboards().length - 1;
+    const inL = new Set(L.map(b => b.id));
+    $('#addBlock').innerHTML = '<option value="">+ Bloc intégré…</option>' + Object.entries(BLOCKS).filter(([id]) => !inL.has(id)).map(([id, b]) => `<option value="${id}">${b.title}</option>`).join('');
+  }
+  if (!L.length) $('#dashGrid').innerHTML = `<div class="card empty" style="grid-column:1/-1">Tableau vide : cliquer sur « Personnaliser » puis « + Graphique »${sec ? ' ou « + Bloc intégré »' : ''}.</div>`;
+  if (L.length) $('#dashGrid').innerHTML = L.filter(b => editing || !b.hidden).map(b => {
     const def = blockDef(b.id);
     const inner = b.hidden ? `<div class="card off-card">${def.title}</div>` : def.custom ? customBlock(def.custom, st, after) : B[b.id]();
-    const own = def.custom ? `<button data-edit-chart="${b.id}" title="Modifier">${ic('edit')}</button><button data-del-chart="${b.id}" title="Supprimer">${ic('trash')}</button>` : '';
+    const own = def.custom ? `<button data-edit-chart="${b.id}" title="Modifier">${ic('edit')}</button><button data-del-chart="${b.id}" title="Supprimer">${ic('trash')}</button>`
+      : sec ? `<button data-remove-block="${b.id}" title="Retirer de ce tableau">${ic('trash')}</button>` : '';
     const bar = editing ? `<div class="edit-bar">${ic('grip')}${def.title}${own}<button data-toggle-block="${b.id}" title="${b.hidden ? 'Afficher' : 'Masquer'}">${ic(b.hidden ? 'eyeOff' : 'eye')}</button></div>` : '';
     return `<div class="block span-${def.span} ${b.hidden ? 'off' : ''}" data-block="${b.id}" ${editing ? 'draggable="true"' : ''}>${bar}${inner}</div>`;
   }).join('');
@@ -891,7 +981,7 @@ function bindLayoutDnd() {
     if (target === dragId) return;
     const L = layout(), item = L.splice(L.findIndex(x => x.id === dragId), 1)[0];
     L.splice(L.findIndex(x => x.id === target) + (before ? 0 : 1), 0, item);
-    D.settings.layout = L; dragId = null;
+    saveLayout(L); dragId = null;
     stampSettings(); persist(); renderDashboard();
   });
   grid.addEventListener('dragend', () => { dragId = null; clear(); });
@@ -1039,6 +1129,201 @@ function catDetail(id) {
 }
 
 // ================= Objectifs =================
+// ================= Budgets =================
+// Budget : { id, name, amount, color, recur: 'monthly'|'once', start, end, source, rules: [{ cat, tags }], subs: [subId],
+//            include: [txId], exclude: [txId | 'sub:<subId>'], u }
+// Mensuel : start/end = 'YYYY-MM' (end vide = sans fin). Ponctuel : start/end = 'YYYY-MM-DD'.
+// Une transaction ne compte que si elle tombe dans une période du budget (le mois, ou du … au …).
+// source : 'in' (toutes les entrées) | 'in:<catId>' (une catégorie d'entrée, ex. Salaire) | 'balance' (le solde) | '' (aucune)
+function budgetWindows(b, a, z) {
+  if (b.recur === 'once') return b.start && b.end && b.start <= z && b.end >= a ? [{ start: b.start, end: b.end, label: `du ${fmtDate(b.start)} au ${fmtDate(b.end)}` }] : [];
+  if (!b.start) return [];
+  const out = [], last = b.end && b.end < z.slice(0, 7) ? b.end : z.slice(0, 7);
+  for (let m = b.start > a.slice(0, 7) ? b.start : a.slice(0, 7); m <= last; m = shiftMonth(m, 1)) out.push({ start: m + '-01', end: `${m}-${daysIn(m)}`, label: monthLabel(m) });
+  return out;
+}
+const budgetAuto = (b, t) => (b.rules || []).some(x => seriesMatch(t, { cat: x.cat || '', tags: x.tags || [] }));
+function budgetCounts(b, t) {
+  if (t.type !== 'out') return false;
+  if (t.sub) return (b.subs || []).includes(t.subId) || (budgetAuto(b, t) && !(b.exclude || []).includes('sub:' + t.subId));
+  if ((b.exclude || []).includes(t.id)) return false;
+  return (b.include || []).includes(t.id) || budgetAuto(b, t);
+}
+function budgetState(b, a, z) {
+  const wins = budgetWindows(b, a, z);
+  const items = wins.flatMap(w => itemsIn(w.start, w.end).filter(t => budgetCounts(b, t)));
+  const alloc = b.amount * wins.length, spent = sumBy(items, t => t.amount);
+  return { wins, items, alloc, spent, left: alloc - spent };
+}
+const budgetSourceLabel = src => src === 'balance' ? 'le solde' : src?.startsWith('in:') ? catName(src.slice(3)) : src === 'in' ? 'les entrées' : 'aucun financement';
+const budgetPeriodLabel = (b, wins) => b.recur === 'once' ? `Ponctuel · ${wins[0]?.label || `du ${fmtDate(b.start)} au ${fmtDate(b.end)}`}`
+  : `Mensuel · ${wins.length > 1 ? plural(wins.length, 'mois') : wins[0]?.label || `depuis ${monthLabel(b.start).toLowerCase()}`}${b.end ? ` (jusqu'à ${monthShort(b.end)})` : ''}`;
+
+function renderBudgets() {
+  const st = stats(R);
+  const list = D.budgets.map(b => ({ b, s: budgetState(b, R.start, R.end) })).filter(x => x.s.wins.length);
+  const off = D.budgets.filter(b => !list.some(x => x.b === b));
+  const alloc = sumBy(list, x => x.s.alloc), spent = sumBy(list, x => x.s.spent), over = list.filter(x => x.s.left < 0).length;
+  const reserved = new Map();
+  list.forEach(x => { const k = x.b.source ?? 'in'; reserved.set(k, (reserved.get(k) || 0) + x.s.alloc); });
+  const fromIncome = sumBy([...reserved].filter(([k]) => k === 'in' || k.startsWith('in:')), ([, v]) => v);
+  $('#budgetKpis').innerHTML = [
+    ['Budgets de la période', eur(alloc), plural(list.length, 'budget'), ''],
+    ['Dépensé', eur(spent), alloc ? `${pct(spent / alloc * 100, 0)} des budgets` : '–', 'out'],
+    ['Reste dans les budgets', signed(alloc - spent), over ? `<span class="out">${plural(over, 'budget')} dépassé${over > 1 ? 's' : ''}</span>` : 'aucun dépassement', alloc - spent >= 0 ? 'in' : 'out'],
+    ['Reste après budgets', signed(st.inn - fromIncome), `entrées ${eur(st.inn)} − réservé ${eur(fromIncome)}`, st.inn - fromIncome >= 0 ? 'in' : 'out']
+  ].map(([l, v, sub, c]) => `<div class="card kpi"><div class="lbl">${l}</div><div class="val ${c}">${v}</div><div class="sub">${sub}</div></div>`).join('');
+  // D'où vient l'argent des budgets : pour chaque source, ce qui est disponible, réservé et ce qu'il reste
+  const avail = k => k === 'in' ? st.inn : k.startsWith('in:') ? sumBy(st.ins.filter(t => t.cat === k.slice(3)), t => t.amount) : k === 'balance' ? balanceAt(addDays(R.start, -1)) : null;
+  const rows = [...reserved].sort((a, b) => b[1] - a[1]).map(([k, v]) => {
+    const a = avail(k);
+    return `<tr><td>${k === 'balance' ? 'Solde (début de période)' : k === '' ? 'Aucun financement' : k === 'in' ? 'Toutes les entrées' : esc(catName(k.slice(3)))}</td>
+      <td class="r num">${a == null ? '–' : eur(a)}</td><td class="r num out">${eur(v)}</td><td class="r num ${a == null ? '' : a - v >= 0 ? 'in' : 'out'}" style="font-weight:600">${a == null ? '–' : signed(a - v)}</td></tr>`;
+  }).join('');
+  $('#budgetFunding').innerHTML = `<h3>Financement des budgets<span class="mut">${rangeLabel(R)}</span></h3>` + (rows
+    ? `<div class="table-wrap"><table><thead><tr><th>Source</th><th class="r">Disponible</th><th class="r">Réservé aux budgets</th><th class="r">Reste après budgets</th></tr></thead><tbody>${rows}</tbody></table></div>`
+    : emptyHtml('Aucun budget sur cette période'));
+  const card = ({ b, s }) => {
+    const p = s.alloc ? s.spent / s.alloc * 100 : 0, cls = p > 100 ? 'over' : p > 85 ? 'warn' : '';
+    const last = [...s.items].sort((x, y) => y.date.localeCompare(x.date)).slice(0, 4);
+    return `<div class="card goal">
+      <div class="cat-head"><div class="sw" style="background:${b.color}">${ic('wallet', 'stroke:#fff')}</div><div><div class="nm">${esc(b.name)}</div><div class="mut" style="font-size:12px">${esc(budgetPeriodLabel(b, s.wins))} · financé par ${esc(budgetSourceLabel(b.source ?? 'in'))}</div></div>
+        <div class="am">${s.left < 0 ? '<span class="badge" style="background:color-mix(in srgb,var(--out) 15%,transparent);color:var(--out)">Dépassé</span>' : ''}</div></div>
+      <div class="big" style="margin-top:14px">${eur(s.spent)} <span class="mut" style="font-size:14px;font-weight:400">/ ${eur(s.alloc)}</span></div>
+      <div class="prog ${cls}"><i style="width:${Math.min(100, p)}%;${cls ? '' : `background:${b.color}`}"></i></div>
+      <div class="mut" style="font-size:13px">${s.left >= 0 ? `Reste ${eur(s.left)}` : `<span class="out">Dépassé de ${eur(-s.left)}</span>`} · ${plural(s.items.length, 'transaction')}</div>
+      ${last.length ? `<div style="margin-top:12px;font-size:12px">${last.map(t => `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0"><span class="mut">${fmtDM(t.date)} · ${esc(t.desc || catName(t.cat))}</span><span class="num out">−${eur(t.amount)}</span></div>`).join('')}</div>` : ''}
+      <div style="display:flex;gap:6px;margin-top:14px;flex-wrap:wrap">
+        <button class="btn sm" data-budget-detail="${b.id}">Détail</button>
+        <span style="flex:1"></span>
+        <button class="icon-btn" title="Modifier" data-edit-budget="${b.id}">${ic('edit')}</button>
+        <button class="icon-btn del" title="Supprimer" data-del-budget="${b.id}">${ic('trash')}</button>
+      </div></div>`;
+  };
+  $('#budgetsGrid').innerHTML = list.map(card).join('') || '<div class="card empty" style="grid-column:1/-1">Aucun budget sur cette période. Bouton « + Budget » pour en créer un.</div>';
+  $('#budgetsOff').innerHTML = off.length ? `<div class="section-title">Hors de la période affichée</div><div class="card"><div class="table-wrap"><table><tbody>${off.map(b =>
+    `<tr><td><b>${esc(b.name)}</b> <span class="mut">${esc(budgetPeriodLabel(b, []))}</span></td><td class="r num">${eur(b.amount)}</td><td class="r" style="width:90px"><button class="icon-btn" title="Modifier" data-edit-budget="${b.id}">${ic('edit')}</button><button class="icon-btn del" title="Supprimer" data-del-budget="${b.id}">${ic('trash')}</button></td></tr>`).join('')}</tbody></table></div></div>` : '';
+}
+
+async function budgetClick(e) {
+  const el = e.target.closest('[data-edit-budget],[data-del-budget],[data-budget-detail]');
+  if (!el) return;
+  const d = el.dataset, b = D.budgets.find(x => x.id === (d.editBudget || d.delBudget || d.budgetDetail));
+  if (!b) return;
+  if (d.editBudget) budgetModal(b);
+  else if (d.delBudget) {
+    if (await confirmModal('Supprimer le budget', `Suppression du budget « ${esc(b.name)} ». Les transactions ne sont pas touchées.`)) {
+      markDeleted(b.id, 'budget'); D.budgets = D.budgets.filter(x => x.id !== b.id); persist(); render();
+    }
+  } else {
+    const s = budgetState(b, R.start, R.end);
+    modal({
+      title: esc(b.name), submit: 'Modifier', wide: true,
+      body: `<div class="mut">${esc(budgetPeriodLabel(b, s.wins))} · ${eur(s.spent)} dépensés sur ${eur(s.alloc)}</div>
+        <div class="table-wrap" style="max-height:420px;overflow-y:auto"><table><tbody>${[...s.items].sort((x, y) => y.date.localeCompare(x.date)).map(t =>
+          `<tr><td class="num mut" style="width:100px">${fmtDate(t.date)}</td><td class="cell-desc"><b>${esc(t.desc) || '–'}</b> ${t.sub ? '<span class="badge">Mensualité</span>' : ''}</td><td>${catTag(t.cat)}</td><td class="r num out">−${eur(t.amount)}</td></tr>`).join('') || '<tr><td class="empty">Aucune transaction</td></tr>'}</tbody></table></div>`,
+      onSubmit: () => { setTimeout(() => budgetModal(b), 0); }
+    });
+  }
+}
+
+function budgetModal(existing) {
+  const b = existing || { name: '', amount: '', color: PALETTE[(D.budgets.length + 4) % PALETTE.length], recur: 'monthly', start: thisMonth(), end: '', source: 'in', rules: [], subs: [], include: [], exclude: [] };
+  const opts = (map, cur) => Object.entries(map).map(([v, l]) => `<option value="${v}" ${String(cur) === v ? 'selected' : ''}>${esc(l)}</option>`).join('');
+  const allCats = [...new Map([...catsOf('out'), ...catsOf('in')].map(x => [x.id, x])).values()];
+  const sources = { in: 'Toutes les entrées', ...Object.fromEntries(catsOf('in').map(c2 => ['in:' + c2.id, 'Entrée : ' + c2.name])), balance: 'Le solde (argent déjà disponible)', '': 'Aucun (ne rien réserver)' };
+  let n = 0;
+  const ruleHtml = x => {
+    const k = n++;
+    return `<div class="serie card" data-rule><div class="row">
+        <label class="f">Catégorie principale<select name="rcat"><option value="">Aucune</option>${allCats.map(o => `<option value="${o.id}" ${o.id === x.cat ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>
+        <button type="button" class="icon-btn del" data-rule-del title="Retirer cette règle" style="align-self:flex-end">${ic('trash')}</button></div>
+      ${catChips('rtags-' + k, x.tags || [], 'Étiquettes (toutes requises)')}</div>`;
+  };
+  // Choix manuels : true = compter, false = ne pas compter (quel que soit l'automatique)
+  const manual = new Map([...(b.include || []).map(id => [id, true]), ...(b.exclude || []).filter(id => !id.startsWith('sub:')).map(id => [id, false])]);
+  const outSubs = D.subs.filter(x => x.type === 'out');
+  modal({
+    title: existing ? 'Modifier le budget' : 'Nouveau budget',
+    submit: existing ? 'Enregistrer' : 'Créer',
+    wide: true,
+    body: `<div class="row"><label class="f">Nom<input name="name" value="${esc(b.name)}" placeholder="ex. Courses"></label>
+        <label class="f" style="flex:.6">Montant (€)<input name="amount" inputmode="decimal" value="${b.amount}" placeholder="0,00"></label>
+        <label class="f" style="flex:0 0 auto">Couleur<input type="color" name="color" value="${b.color}"></label></div>
+      <div class="row"><label class="f">Type<select name="recur">${opts({ monthly: 'Mensuel (se répète chaque mois)', once: 'Ponctuel (du … au …)' }, b.recur)}</select></label>
+        <label class="f" data-m>Mois de début<input name="mstart" type="month" value="${b.recur === 'monthly' ? b.start : thisMonth()}"></label>
+        <label class="f" data-m>Mois de fin (optionnel)<input name="mend" type="month" value="${b.recur === 'monthly' ? b.end || '' : ''}"></label>
+        <label class="f" data-o>Du<input name="dstart" type="date" value="${b.recur === 'once' ? b.start : R.start}"></label>
+        <label class="f" data-o>Au<input name="dend" type="date" value="${b.recur === 'once' ? b.end : R.end}"></label></div>
+      <label class="f">Financé par<select name="source">${opts(sources, b.source ?? 'in')}</select><span style="font-size:12px">Le montant est réservé sur cette source : elle ne bouge pas, mais la page affiche ce qu'il reste après les budgets.</span></label>
+      <div class="f"><span>Sélection automatique <small class="mut">(une transaction compte si elle correspond à au moins une règle)</small></span>
+        <div class="series" data-rules>${(b.rules || []).map(ruleHtml).join('')}</div>
+        <button type="button" class="btn sm" data-rule-add style="align-self:flex-start">${ic('plus')}Ajouter une règle</button></div>
+      ${outSubs.length ? `<div class="f"><span>Mensualités comprises</span><div class="tag-pick">${outSubs.map(x => `<label class="tag lbl pick"><input type="checkbox" name="bsubs" value="${x.id}" ${(b.subs || []).includes(x.id) ? 'checked' : ''}>${esc(subNow(x).name)}</label>`).join('')}</div></div>` : ''}
+      <div class="f"><span>Transactions <small class="mut" data-win></small></span>
+        <input data-txsearch placeholder="Rechercher (description, catégorie, montant)…">
+        <div class="budget-tx" data-txlist></div></div>`,
+    onMount: form => {
+      const draft = () => {
+        const once = form.recur.value === 'once';
+        return { recur: form.recur.value, start: once ? form.dstart.value : form.mstart.value, end: once ? form.dend.value : form.mend.value,
+          rules: $$('[data-rule]', form).map(el => ({ cat: el.querySelector('[name="rcat"]').value, tags: Array.from(el.querySelectorAll('.tag-pick input:checked'), i => i.value) })) };
+      };
+      const refresh = () => {
+        const once = form.recur.value === 'once';
+        $$('[data-m]', form).forEach(el => { el.hidden = once; });
+        $$('[data-o]', form).forEach(el => { el.hidden = !once; });
+        const d = draft();
+        // Période de référence : celle affichée (si le budget la couvre), sinon sa première période
+        const w = budgetWindows(d, R.start, R.end)[0] || (once ? (d.start && d.end ? budgetWindows(d, d.start, d.end)[0] : null) : d.start ? budgetWindows({ ...d, end: d.start }, d.start + '-01', `${d.start}-${daysIn(d.start)}`)[0] : null);
+        $('[data-win]', form).textContent = w ? `(${w.label} — cocher / décocher pour ajouter ou retirer)` : '(choisir la période)';
+        const q = ($('[data-txsearch]', form).value || '').trim().toLowerCase();
+        const txs = w ? D.tx.filter(t => t.type === 'out' && t.date >= w.start && t.date <= w.end).sort((x, y) => y.date.localeCompare(x.date)) : [];
+        const shown = txs.filter(t => !q || [t.desc, catName(t.cat), tagNames(t), String(t.amount).replace('.', ',')].some(v => (v || '').toLowerCase().includes(q)));
+        $('[data-txlist]', form).innerHTML = shown.map(t => {
+          const on = manual.has(t.id) ? manual.get(t.id) : budgetAuto(d, t);
+          return `<label class="btx ${on ? 'on' : ''}"><input type="checkbox" data-tx="${t.id}" ${on ? 'checked' : ''}><span class="num mut">${fmtDM(t.date)}</span><span class="d">${esc(t.desc || '–')}</span>${catTag(t.cat)}<span class="num out">−${eur(t.amount)}</span></label>`;
+        }).join('') || `<div class="mut" style="padding:8px">${w ? 'Aucune sortie sur cette période' : ''}</div>`;
+      };
+      form.addEventListener('change', e => {
+        if (e.target.dataset.tx) { manual.set(e.target.dataset.tx, e.target.checked); e.target.closest('.btx').classList.toggle('on', e.target.checked); return; }
+        if (e.target.name !== 'bsubs' && e.target.name !== 'color') refresh();
+      });
+      $('[data-txsearch]', form).addEventListener('input', refresh);
+      const box = $('[data-rules]', form);
+      box.addEventListener('click', e => { const x = e.target.closest('[data-rule-del]'); if (x) { x.closest('[data-rule]').remove(); refresh(); } });
+      $('[data-rule-add]', form).onclick = () => { box.insertAdjacentHTML('beforeend', ruleHtml({ cat: '', tags: [] })); };
+      refresh();
+    },
+    onSubmit: form => {
+      const amount = parseAmount(form.amount.value), once = form.recur.value === 'once';
+      if (!form.name.value.trim()) return 'Nom manquant.';
+      if (!(amount > 0)) return 'Montant invalide.';
+      const start = once ? form.dstart.value : form.mstart.value, end = once ? form.dend.value : form.mend.value;
+      if (!start) return once ? 'Date de début manquante.' : 'Mois de début manquant.';
+      if (once && !end) return 'Date de fin manquante.';
+      if (end && end < start) return 'La fin précède le début.';
+      const rules = $$('[data-rule]', form).map(el => ({ cat: el.querySelector('[name="rcat"]').value, tags: Array.from(el.querySelectorAll('.tag-pick input:checked'), i => i.value) }))
+        .filter(x => x.cat || x.tags.length);
+      const draftB = { rules };
+      const include = [], exclude = (b.exclude || []).filter(id => id.startsWith('sub:'));
+      for (const [id, v] of manual) {
+        const t = D.tx.find(x => x.id === id);
+        if (!t) continue;
+        const auto = budgetAuto(draftB, t);
+        if (v && !auto) include.push(id);
+        if (!v && auto) exclude.push(id);
+      }
+      const data = { name: form.name.value.trim(), amount, color: form.color.value, recur: form.recur.value, start, end: end || '', source: form.source.value, rules,
+        subs: Array.from(form.querySelectorAll('input[name="bsubs"]:checked'), i => i.value), include, exclude };
+      if (existing) stamp(Object.assign(D.budgets.find(x => x.id === existing.id), data));
+      else D.budgets.push(stamp({ id: uid(), ...data }));
+      persist(); render();
+      toast(existing ? 'Budget modifié' : 'Budget créé');
+    }
+  });
+}
+
 function renderGoals() {
   const saved = g => sumBy(g.moves);
   const totalSaved = sumBy(D.goals, saved), totalTarget = sumBy(D.goals, g => g.target);
@@ -2033,9 +2318,13 @@ function bindEvents() {
   $('#editLayout').onclick = () => setEditing(!editing);
   $('#doneLayout').onclick = () => setEditing(false);
   $('#addChart').onclick = () => chartModal();
-  $('#resetLayout').onclick = () => { D.settings.layout = defaultLayout(); stampSettings(); persist(); renderDashboard(); };
+  $('#resetLayout').onclick = () => { saveLayout(defaultLayout()); stampSettings(); persist(); renderDashboard(); };
+  $('#dashNav').onclick = e => { const b = e.target.closest('[data-dash]'); if (b) openDash(b.dataset.dash); };
+  $$('[data-dash-act]').forEach(b => b.onclick = () => dashAction(b.dataset.dashAct));
+  $('#addBlock').onchange = e => { const id = e.target.value; e.target.value = ''; if (!id) return; saveLayout([{ id, hidden: false }, ...layout().filter(b => b.id !== id)]); stampSettings(); persist(); renderDashboard(); };
+  $('#page-budgets').addEventListener('click', budgetClick);
   bindLayoutDnd();
-  $('#quickAdd').onclick = () => ({ subs: () => subModal(), cats: () => catModal(), goals: () => goalModal() }[page] || (() => txModal(null, txType === 'in' ? 'in' : 'out')))();
+  $('#quickAdd').onclick = () => ({ subs: () => subModal(), cats: () => catModal(), goals: () => goalModal(), budgets: () => budgetModal() }[page] || (() => txModal(null, txType === 'in' ? 'in' : 'out')))();
   $('#themeToggle').onclick = () => { D.settings.theme = D.settings.theme === 'dark' ? 'light' : 'dark'; stampSettings(); persist(); render(); };
   $('#discreetToggle').onclick = () => { D.settings.discreet = !D.settings.discreet; stampSettings(); persist(); render(); };
   $$('#setTheme button').forEach(b => b.onclick = () => { D.settings.theme = b.dataset.v; stampSettings(); persist(); render(); });
@@ -2141,21 +2430,22 @@ function bindEvents() {
   $$('#txFilterType button').forEach(b => b.onclick = () => { txType = b.dataset.v; $$('#txFilterType button').forEach(x => x.classList.toggle('on', x === b)); renderTransactions(); });
 
   document.addEventListener('click', async e => {
-    const el = e.target.closest('[data-edit-chart],[data-del-chart],[data-toggle-block],[data-cat-detail],[data-new-cat],[data-edit-tx],[data-del-tx],[data-edit-sub],[data-del-sub],[data-toggle-sub],[data-edit-cat],[data-del-cat],[data-edit-goal],[data-del-goal],[data-goal-move]');
+    const el = e.target.closest('[data-remove-block],[data-edit-chart],[data-del-chart],[data-toggle-block],[data-cat-detail],[data-new-cat],[data-edit-tx],[data-del-tx],[data-edit-sub],[data-del-sub],[data-toggle-sub],[data-edit-cat],[data-del-cat],[data-edit-goal],[data-del-goal],[data-goal-move]');
     if (!el || $('#app').hidden) return;
     const d = el.dataset;
-    if (d.editChart) chartModal(customCharts().find(c => c.id === d.editChart));
+    if (d.removeBlock) { saveLayout(layout().filter(b => b.id !== d.removeBlock)); stampSettings(); persist(); renderDashboard(); }
+    else if (d.editChart) chartModal(customCharts().find(c => c.id === d.editChart));
     else if (d.delChart) {
       const c = customCharts().find(x => x.id === d.delChart);
       if (await confirmModal('Supprimer le graphique', `Suppression du graphique « ${esc(c.title)} ».`)) {
         D.settings.charts = customCharts().filter(x => x.id !== c.id);
-        D.settings.layout = layout().filter(b => b.id !== c.id);
+        saveLayout(layout().filter(b => b.id !== c.id));
         stampSettings(); persist(); renderDashboard();
       }
     }
     else if (d.toggleBlock) {
       const L = layout(), b = L.find(x => x.id === d.toggleBlock); b.hidden = !b.hidden;
-      D.settings.layout = L; stampSettings(); persist(); renderDashboard();
+      saveLayout(L); stampSettings(); persist(); renderDashboard();
     }
     else if (d.catDetail) { if (!editing) catDetail(d.catDetail); }
     else if (d.newCat) { e.preventDefault(); catModal(null, d.newCat); }

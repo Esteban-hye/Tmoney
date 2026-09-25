@@ -34,8 +34,10 @@
     <div class="brand"><span data-logo></span>Tmoney<small>ALPHA</small></div>
     <nav id="nav">
       <button data-page="dashboard" class="on"><span data-i="dashboard"></span>Tableau de bord</button>
+      <div class="subnav" id="dashNav" hidden></div>
       <button data-page="transactions"><span data-i="list"></span>Transactions</button>
       <button data-page="subs"><span data-i="repeat"></span>Mensualités</button>
+      <button data-page="budgets"><span data-i="wallet"></span>Budgets</button>
       <button data-page="cats"><span data-i="tag"></span>Catégories</button>
       <button data-page="goals"><span data-i="target"></span>Objectifs d'épargne</button>
       <button data-page="settings"><span data-i="settings"></span>Réglages</button>
@@ -74,7 +76,13 @@
       <div class="edit-banner" id="editBanner" hidden>
         <span>Mode personnalisation : glisser un bloc pour le déplacer, cliquer sur l'œil pour l'afficher ou le masquer, « + Graphique » pour créer le vôtre.</span>
         <span style="flex:1"></span>
+        <select id="addBlock" class="sm" data-dash-sec hidden></select>
         <button class="btn sm" id="addChart"><span data-i="plus"></span>Graphique</button>
+        <button class="btn sm" data-dash-act="new"><span data-i="plus"></span>Nouveau tableau</button>
+        <button class="btn sm" data-dash-act="rename" data-dash-sec hidden>Renommer</button>
+        <button class="btn sm" data-dash-act="up" data-dash-sec hidden title="Monter dans la liste">↑</button>
+        <button class="btn sm" data-dash-act="down" data-dash-sec hidden title="Descendre dans la liste">↓</button>
+        <button class="btn sm danger" data-dash-act="del" data-dash-sec hidden>Supprimer le tableau</button>
         <button class="btn sm" id="resetLayout">Réinitialiser</button>
         <button class="btn sm pri" id="doneLayout">Terminé</button>
       </div>
@@ -106,6 +114,14 @@
         <h3>Entrées mensuelles</h3>
         <div class="table-wrap"><table id="subInTable"></table></div>
       </div>
+    </section>
+
+    <!-- Budgets -->
+    <section class="page" id="page-budgets" hidden>
+      <div class="grid g4" id="budgetKpis"></div>
+      <div class="card" id="budgetFunding" style="margin-top:16px"></div>
+      <div class="grid g3" id="budgetsGrid" style="margin-top:16px"></div>
+      <div id="budgetsOff"></div>
     </section>
 
     <!-- Catégories -->

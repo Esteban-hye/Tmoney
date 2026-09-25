@@ -1,7 +1,7 @@
 {
   "name": "tmoney",
   "productName": "Tmoney",
-  "version": "0.11.0-alpha",
+  "version": "0.12.0-alpha",
   "description": "Tmoney - gestion de budget",
   "author": "Esteban",
   "main": "main.js",

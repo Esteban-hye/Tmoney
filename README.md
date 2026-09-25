@@ -11,6 +11,8 @@
 - **Périodes** : semaine, mois, année ou dates libres
 - **Graphiques** : entrées/sorties sur 12 mois, sorties cumulées, évolution du solde, calendrier des sorties, jours de la semaine, 6 répartitions en camembert, comparaison de deux mois
 - **Transactions** : catégorie + plusieurs étiquettes, description, notes, saisie en série, recherche sur tout l'historique
+- **Budgets** : mensuels (récurrents, avec mois de fin optionnel) ou ponctuels (du … au …) ; sélection automatique par catégorie / étiquettes, mensualités et transactions cochées à la main ; financés par les entrées, une catégorie d'entrée (ex. salaire) ou le solde, avec le reste après budgets
+- **Plusieurs tableaux de bord** : le principal + des tableaux secondaires nommés et ordonnés
 - **Mensualités** : sorties et entrées fixes comptées automatiquement chaque mois
 - **Catégories** avec règles : budget max (€/mois) ou part max des entrées (%), fiche détaillée par catégorie
 - **Objectifs d'épargne** avec progression et rythme mensuel conseillé
