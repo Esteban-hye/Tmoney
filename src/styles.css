@@ -83,7 +83,7 @@ nav button.on { background: var(--acc-soft); color: var(--acc); font-weight: 600
 .brand > span { width: 34px; height: 34px; display: inline-flex; }
 .monthnav { display: flex; align-items: center; gap: 4px; background: var(--card); border: 1px solid var(--bd); border-radius: 10px; padding: 3px; }
 .monthnav b { min-width: 140px; text-align: center; font-weight: 600; }
-.page { padding: 24px 30px 40px; max-width: 1500px; }
+.page { padding: 24px 30px 40px; max-width: 2400px; margin: 0 auto; }
 
 /* Cartes */
 .grid { display: grid; gap: 16px; }
@@ -270,3 +270,8 @@ label.check input { width: auto; }
 .serie input[type="color"] { width: 44px; height: 36px; padding: 2px; }
 .chart-values { max-height: 240px; overflow-y: auto; margin-top: 12px; font-size: 13px; }
 .chart-values tr.tot td { border-top: 2px solid var(--bd); }
+.cc-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.cc-kpi { background: var(--card-2); border-radius: 10px; padding: 12px 14px; border-left: 4px solid var(--acc); }
+.cc-kpi .lbl { color: var(--mut); font-size: 12px; }
+.cc-kpi .val { font-size: 21px; font-weight: 700; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+.cc-kpi .sub { color: var(--mut); font-size: 12px; }

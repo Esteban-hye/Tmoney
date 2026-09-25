@@ -313,21 +313,27 @@ const BLOCKS = {
   lastOut: { title: 'Dernières sorties', span: 6 }
 };
 // Graphiques personnalisés (D.settings.charts) :
-// { id, title, type, sense, time, months, cumul, values, span, series: [{ name, cat, tags: [], color }] }
-// Une série prend les transactions dont la catégorie principale est "cat" (toutes si vide)
-// ET qui portent toutes les étiquettes "tags".
-const CHART_TYPES = { pie: 'Camembert', hbar: 'Totaux (barres horizontales)', bar: 'Barres (évolution)', line: 'Courbes (évolution)' };
+// { id, title, type, time, months, cumul, values, span, series: [{ name, cat, tags: [], color, sense }] }
+// Une série prend les transactions dont la catégorie principale est "cat" (toutes si vide) ET qui portent
+// toutes ses autres étiquettes. Si "cat" est aussi cochée en étiquette : catégorie principale OU étiquette.
+// sense = out | in | both ("both" = deux jeux de données séparés, jamais additionnés).
+const CHART_TYPES = {
+  kpi: 'Indicateurs (tuiles)', pie: 'Camembert', hbar: 'Totaux (barres horizontales)', bar: 'Barres (évolution)', line: 'Courbes (évolution)',
+  compare: 'Comparaison avec la période précédente (cumulé)', weekday: 'Jours de la semaine', calendar: 'Calendrier (1re série)'
+};
 const CHART_TIMES = { period: 'Période affichée', months: 'Derniers mois', all: 'Global (tout l\'historique)' };
-const CHART_SENSES = { out: 'Sorties', in: 'Entrées', both: 'Entrées et sorties' };
+const CHART_SENSES = { out: 'Sorties', in: 'Entrées', both: 'Entrées et sorties (séparées)' };
 const CHART_SPANS = { 4: 'Petit (1/3)', 6: 'Moyen (1/2)', 8: 'Grand (2/3)', 12: 'Pleine largeur' };
-// Graphiques créés en 0.9.0 (type pie/hbar/bars12/line12 + liste "items") → nouveau format.
+// Anciens formats → format actuel : 0.9.0 (type pie/hbar/bars12/line12 + "items"), 0.10.0 (sens au niveau du graphique).
 function chartCfg(c) {
-  if (c.series) return c;
-  const old = { pie: ['pie', 'period'], hbar: ['hbar', 'period'], bars12: ['bar', 'months'], line12: ['line', 'months'] }[c.type] || ['pie', 'period'];
-  return {
-    ...c, type: old[0], time: old[1], months: 12, cumul: false, values: false,
-    series: (c.items || []).map(id => c.src === 'tag' ? { name: '', cat: '', tags: [id], color: '' } : { name: '', cat: id, tags: [], color: '' })
-  };
+  let r = c;
+  if (!r.series) {
+    const old = { pie: ['pie', 'period'], hbar: ['hbar', 'period'], bars12: ['bar', 'months'], line12: ['line', 'months'] }[r.type] || ['pie', 'period'];
+    r = { ...r, type: old[0], time: old[1], months: 12, cumul: false, values: false,
+      series: (r.items || []).map(id => r.src === 'tag' ? { name: '', cat: '', tags: [id], color: '' } : { name: '', cat: id, tags: [], color: '' }) };
+  }
+  if (r.series.some(x => !x.sense)) r = { ...r, series: r.series.map(x => ({ ...x, sense: x.sense || r.sense || 'out' })) };
+  return r;
 }
 const customCharts = () => D.settings.charts || [];
 const blockDef = id => BLOCKS[id] || (c => c && { title: esc(c.title), span: c.span, custom: c })(customCharts().find(c => c.id === id));
@@ -368,18 +374,35 @@ function pieBlock(id, sub, entries, centerLabel, after, title = BLOCKS[id]?.titl
   return cardHtml(title, sub, body);
 }
 
-const seriesLabel = x => x.name || [x.cat ? catName(x.cat) : '', ...x.tags.map(catName)].filter(Boolean).join(' + ') || 'Série';
+const seriesLabel = x => {
+  if (x.name) return x.name;
+  const main = x.cat ? catName(x.cat) + (x.tags.includes(x.cat) ? ' (catégorie ou étiquette)' : '') : '';
+  return [main, ...x.tags.filter(g => g !== x.cat).map(catName)].filter(Boolean).join(' + ') || 'Série';
+};
+const seriesMatch = (t, x) => {
+  const either = x.cat && x.tags.includes(x.cat);
+  if (x.cat && !(t.cat === x.cat || (either && tagsOf(t).includes(x.cat)))) return false;
+  return x.tags.every(g => g === x.cat || tagsOf(t).includes(g));
+};
+const hexMix = (hex, w) => { // éclaircit une couleur #rrggbb (w = part de blanc)
+  const n = parseInt(String(hex).replace('#', '').slice(0, 6), 16);
+  if (!isFinite(n)) return hex;
+  const c = [n >> 16, (n >> 8) & 255, n & 255].map(v => Math.round(v + (255 - v) * w));
+  return '#' + c.map(v => v.toString(16).padStart(2, '0')).join('');
+};
 function chartRange(c) {
   if (c.time === 'months') {
     const endM = R.end.slice(0, 7), n = Math.min(120, Math.max(1, +c.months || 12)), startM = shiftMonth(endM, 1 - n);
-    return { start: startM + '-01', end: `${endM}-${daysIn(endM)}`, label: `${n} mois jusqu'à ${monthLabel(endM).toLowerCase()}` };
+    return { start: startM + '-01', end: `${endM}-${daysIn(endM)}`, label: `${n} mois jusqu'à ${monthLabel(endM).toLowerCase()}`,
+      prev: { start: shiftMonth(startM, -n) + '-01', end: `${shiftMonth(endM, -n)}-${daysIn(shiftMonth(endM, -n))}` }, prevLabel: `${n} mois préc.` };
   }
   if (c.time === 'all') {
     const first = [...D.tx.map(t => t.date), ...D.subs.map(x => x.start + '-01')].sort()[0] || todayStr();
     const last = [todayStr(), ...D.tx.map(t => t.date)].sort().pop();
-    return { start: first, end: last, label: `depuis ${monthLabel(first.slice(0, 7)).toLowerCase()}` };
+    return { start: first, end: last, label: `depuis ${monthLabel(first.slice(0, 7)).toLowerCase()}`, prev: null };
   }
-  return { start: R.start, end: R.end, label: '' };
+  const p = shiftRange(R, -1);
+  return { start: R.start, end: R.end, label: '', prev: { start: p.start, end: p.end }, prevLabel: `${PERIOD_NAMES[R.kind]} préc.` };
 }
 
 function customBlock(raw, st, after) {
@@ -394,21 +417,45 @@ function customBlock(raw, st, after) {
     if (!x.color && used.has(col)) col = PALETTE.find(p => !used.has(p)) || PALETTE[i % PALETTE.length];
     used.add(col); x.col = col; x.label = seriesLabel(x);
   });
+  // Jeux de données : une série "les deux" donne une ligne sorties + une ligne entrées (couleur éclaircie)
+  const sets = [];
+  for (const x of series) {
+    for (const sn of x.sense === 'both' ? ['out', 'in'] : [x.sense || 'out']) {
+      const both = x.sense === 'both';
+      sets.push({ x, sn, label: x.label + (both ? (sn === 'in' ? ' · entrées' : ' · sorties') : ''), col: both && sn === 'in' ? hexMix(x.col, .45) : x.col, dash: both && sn === 'in' });
+    }
+  }
   const rg = chartRange(c);
-  const items = itemsIn(rg.start, rg.end).filter(t => c.sense === 'both' || t.type === c.sense);
-  const match = (t, x) => (!x.cat || t.cat === x.cat) && x.tags.every(g => tagsOf(t).includes(g));
-  const sub = [CHART_SENSES[c.sense].toLowerCase(), rg.label].filter(Boolean).join(' · ');
+  const itemsOf = r => itemsIn(r.start, r.end);
+  const items = itemsOf(rg);
+  const pick = (arr, d) => arr.filter(t => t.type === d.sn && seriesMatch(t, d.x));
+  const senses = [...new Set(sets.map(d => d.sn))];
+  const senseLbl = senses.length > 1 ? 'entrées et sorties' : senses[0] === 'in' ? 'entrées' : 'sorties';
+  const sub = [senseLbl, rg.label].filter(Boolean).join(' · ');
   const valTable = (head, rows) => c.values ? `<div class="table-wrap chart-values"><table><thead><tr>${head.map((h, i) => `<th class="${i ? 'r' : ''}">${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>` : '';
+  const dot = d => `<i class="dot" style="background:${d.col}"></i> ${esc(d.label)}`;
+
+  if (c.type === 'kpi') {
+    const prevItems = rg.prev ? itemsOf(rg.prev) : null;
+    const tiles = sets.map(d => {
+      const list = pick(items, d), val = sumBy(list, t => t.amount);
+      let delta = '';
+      if (prevItems) {
+        const pv = sumBy(pick(prevItems, d), t => t.amount);
+        if (pv) { const v = (val - pv) / pv * 100, good = d.sn === 'in' ? v >= 0 : v <= 0; delta = `<span class="delta" style="color:var(${good ? '--in' : '--out'})">${v >= 0 ? '+' : ''}${pct(v, 0)}</span> vs ${rg.prevLabel} · `; }
+      }
+      return `<div class="cc-kpi" style="border-left-color:${d.col}"><div class="lbl">${esc(d.label)}</div><div class="val ${d.sn}">${eur(val)}</div><div class="sub">${delta}${plural(list.length, 'transaction')}</div></div>`;
+    }).join('');
+    return cardHtml(title, sub, `<div class="cc-kpis">${tiles}</div>`);
+  }
 
   if (c.type === 'pie' || c.type === 'hbar') {
-    const entries = series.map(x => ({ label: x.label, value: sumBy(items.filter(t => match(t, x))), color: x.col })).sort((a, b) => b.value - a.value);
+    const entries = sets.map(d => ({ label: d.label, value: sumBy(pick(items, d), t => t.amount), color: d.col })).sort((a, b) => b.value - a.value);
     const total = sumBy(entries, e => e.value);
-    const table = valTable(['Série', 'Montant', 'Part'], entries.map(e => `<tr><td><i class="dot" style="background:${e.color}"></i> ${esc(e.label)}</td><td class="r num">${eur(e.value)}</td><td class="r num mut">${total ? pct(e.value / total * 100) : '–'}</td></tr>`).join(''));
     const shown = entries.filter(e => e.value > 0);
-    if (c.type === 'pie') {
-      // la légende du camembert affiche déjà montants et parts : pas de tableau en plus
-      return pieBlock(c.id, sub, shown, CHART_SENSES[c.sense].toLowerCase(), after, title);
-    }
+    // la légende du camembert affiche déjà montants et parts : pas de tableau en plus
+    if (c.type === 'pie') return pieBlock(c.id, sub, shown, senseLbl, after, title);
+    const table = valTable(['Série', 'Montant', 'Part'], entries.map(e => `<tr><td><i class="dot" style="background:${e.color}"></i> ${esc(e.label)}</td><td class="r num">${eur(e.value)}</td><td class="r num mut">${total ? pct(e.value / total * 100) : '–'}</td></tr>`).join(''));
     if (!shown.length) return cardHtml(title, sub, emptyHtml('Aucune donnée') + table);
     after.push(() => chart(cid, {
       type: 'bar',
@@ -418,39 +465,87 @@ function customBlock(raw, st, after) {
     return cardHtml(title, sub, `<div class="chart-box" style="height:${Math.max(160, 44 * shown.length + 40)}px"><canvas id="${cid}"></canvas></div>` + table);
   }
 
-  // Évolution : par jour sur la période affichée (si ≤ 3 mois), sinon par mois
+  if (c.type === 'weekday') {
+    const nbDays = dayCount(rg.start, rg.end);
+    const data = sets.map(d => { const v = Array(7).fill(0); pick(items, d).forEach(t => { v[weekday(t.date)] += t.amount; }); return v; });
+    after.push(() => chart(cid, {
+      type: 'bar',
+      data: { labels: WD, datasets: sets.map((d, i) => ({ label: d.label, data: data[i], backgroundColor: d.col, borderRadius: 5, maxBarThickness: 30 })) },
+      options: { maintainAspectRatio: false, plugins: { legend: legendBottom, tooltip: tooltipEur }, scales: { x: { grid: { display: false } }, y: axisEur() } }
+    }));
+    const table = valTable(['Jour', ...sets.map(dot)], WD.map((w, i) => `<tr><td class="mut">${w}</td>${data.map(v => `<td class="r num">${eur(v[i])}</td>`).join('')}</tr>`).join(''));
+    return cardHtml(title, sub + ` · ${plural(nbDays, 'jour')}`, `<div class="chart-box"><canvas id="${cid}"></canvas></div>` + table);
+  }
+
+  if (c.type === 'calendar') {
+    const d0 = sets[0], perDay = new Map();
+    pick(items, d0).forEach(t => perDay.set(t.date, (perDay.get(t.date) || 0) + t.amount));
+    const max = Math.max(0, ...perDay.values()), today = todayStr(), n = dayCount(rg.start, rg.end);
+    const color = v => (v > 0 && max ? `background:color-mix(in srgb, ${d0.col} ${Math.round(18 + 82 * v / max)}%, var(--card-2))` : '');
+    const days = [...Array(n)].map((_, i) => addDays(rg.start, i));
+    const body = n <= 62
+      ? `<div class="cal">${['L', 'M', 'M', 'J', 'V', 'S', 'D'].map(w => `<div class="wd">${w}</div>`).join('')}${'<div></div>'.repeat(weekday(rg.start))}
+          ${days.map(dd => { const v = perDay.get(dd) || 0; return `<div class="d ${dd === today ? 'today' : ''} ${max && v / max > .45 ? 'hot' : ''}" style="${color(v)}" title="${fmtDate(dd)} : ${eur(v)}"><b>${+dd.slice(8)}</b><span>${v ? eur0(v) : ''}</span></div>`; }).join('')}</div>`
+      : `<div class="heat-wrap"><div class="heat-days">${['L', '', 'M', '', 'V', '', 'D'].map(w => `<span>${w}</span>`).join('')}</div>
+          <div class="heat">${'<i style="visibility:hidden"></i>'.repeat(weekday(rg.start))}${days.map(dd => { const v = perDay.get(dd) || 0; return `<i style="${color(v)}" title="${fmtDate(dd)} : ${eur(v)}"></i>`; }).join('')}</div></div>`;
+    return cardHtml(title, `${esc(d0.label)}${max ? ` · max ${eur(max)} / jour` : ''}`, body);
+  }
+
+  if (c.type === 'compare') {
+    if (!rg.prev) return cardHtml(title, sub, emptyHtml('Comparaison impossible en « Global » : choisir « Période affichée » ou « Derniers mois »'));
+    const byDay = dayCount(rg.start, rg.end) <= 92;
+    const stepKeys = r => { const k = []; if (byDay) for (let d = r.start; d <= r.end; d = addDays(d, 1)) k.push(d); else for (let m = r.start.slice(0, 7); m <= r.end.slice(0, 7); m = shiftMonth(m, 1)) k.push(m); return k; };
+    const kCur = stepKeys(rg), kPrev = stepKeys(rg.prev), len = Math.max(kCur.length, kPrev.length);
+    const cumul = (arr, keys, d) => { const idx = new Map(keys.map((k, i) => [k, i])), v = Array(len).fill(0); pick(arr, d).forEach(t => { const i = idx.get(byDay ? t.date : t.date.slice(0, 7)); if (i != null) v[i] += t.amount; }); let a = 0; return v.map(n => (a += n)); };
+    const prevItems = itemsOf(rg.prev), today = todayStr();
+    const cut = kCur.findIndex(k => (byDay ? k : k + '-01') > today);
+    const datasets = sets.flatMap(d => {
+      const cur = cumul(items, kCur, d).map((v, i) => (cut >= 0 && i >= cut ? null : v));
+      return [
+        { label: d.label, data: cur.slice(0, kCur.length), borderColor: d.col, backgroundColor: d.col, pointRadius: 0, borderWidth: 2.5, cubicInterpolationMode: 'monotone' },
+        { label: d.label + ' · ' + rg.prevLabel, data: cumul(prevItems, kPrev, d).slice(0, kPrev.length), borderColor: hexMix(d.col, .4), backgroundColor: hexMix(d.col, .4), borderDash: [5, 5], pointRadius: 0, borderWidth: 1.5, cubicInterpolationMode: 'monotone' }
+      ];
+    });
+    after.push(() => chart(cid, {
+      type: 'line',
+      data: { labels: [...Array(len)].map((_, i) => (byDay ? (R.kind === 'month' && c.time === 'period' ? i + 1 : kCur[i] ? fmtDM(kCur[i]) : '') : kCur[i] ? monthShort(kCur[i]) : '')), datasets },
+      options: { maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: legendBottom, tooltip: tooltipEur }, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 12 } }, y: axisEur() } }
+    }));
+    return cardHtml(title, `${sub} · vs ${rg.prevLabel}`, `<div class="chart-box"><canvas id="${cid}"></canvas></div>`);
+  }
+
+  // Évolution (barres / courbes) : par jour sur la période affichée (si ≤ 3 mois), sinon par mois
   const byDay = c.time === 'period' && dayCount(rg.start, rg.end) <= 92;
   const keys = [];
   if (byDay) for (let d = rg.start; d <= rg.end; d = addDays(d, 1)) keys.push(d);
   else for (let m = rg.start.slice(0, 7); m <= rg.end.slice(0, 7); m = shiftMonth(m, 1)) keys.push(m);
   const idx = new Map(keys.map((k, i) => [k, i]));
-  const data = series.map(x => {
+  const data = sets.map(d => {
     const v = Array(keys.length).fill(0);
-    for (const t of items) if (match(t, x)) { const i = idx.get(byDay ? t.date : t.date.slice(0, 7)); if (i != null) v[i] += t.amount; }
+    for (const t of pick(items, d)) { const i = idx.get(byDay ? t.date : t.date.slice(0, 7)); if (i != null) v[i] += t.amount; }
     if (c.cumul) { let acc = 0; return v.map(n => (acc += n)); }
     return v;
   });
-  const labels = keys.map(k => (byDay ? fmtDM(k) : monthShort(k)));
   const line = c.type === 'line';
   after.push(() => chart(cid, {
     type: line ? 'line' : 'bar',
     data: {
-      labels,
-      datasets: series.map((x, i) => ({
-        label: x.label, data: data[i], borderColor: x.col, backgroundColor: x.col,
-        ...(line ? { cubicInterpolationMode: 'monotone', pointRadius: keys.length > 40 ? 0 : 3, borderWidth: 2 } : { borderRadius: 4, maxBarThickness: 18 })
+      labels: keys.map(k => (byDay ? fmtDM(k) : monthShort(k))),
+      datasets: sets.map((d, i) => ({
+        label: d.label, data: data[i], borderColor: d.col, backgroundColor: d.col,
+        ...(line ? { cubicInterpolationMode: 'monotone', pointRadius: keys.length > 40 ? 0 : 3, borderWidth: 2, ...(d.dash ? { borderDash: [5, 4] } : {}) } : { borderRadius: 4, maxBarThickness: 18 })
       }))
     },
     options: { maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: legendBottom, tooltip: tooltipEur }, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 12 } }, y: axisEur() } }
   }));
   const rows = keys.map((k, i) => `<tr><td class="mut">${byDay ? fmtDate(k) : monthLabel(k)}</td>${data.map(d => `<td class="r num">${eur(d[i])}</td>`).join('')}</tr>`).reverse().join('')
     + (c.cumul ? '' : `<tr class="tot"><td><b>Total</b></td>${data.map(d => `<td class="r num"><b>${eur(sumBy(d, n => n))}</b></td>`).join('')}</tr>`);
-  const table = valTable([byDay ? 'Jour' : 'Mois', ...series.map(x => `<i class="dot" style="background:${x.col}"></i> ${esc(x.label)}`)], rows);
+  const table = valTable([byDay ? 'Jour' : 'Mois', ...sets.map(dot)], rows);
   return cardHtml(title, sub + (c.cumul ? ' · cumulé' : ''), `<div class="chart-box"><canvas id="${cid}"></canvas></div>` + table);
 }
 
 function chartModal(existing) {
-  const c = existing ? chartCfg(existing) : { title: '', type: 'line', sense: 'out', time: 'period', months: 12, cumul: false, values: false, span: 6, series: [] };
+  const c = existing ? chartCfg(existing) : { title: '', type: 'line', time: 'period', months: 12, cumul: false, values: false, span: 6, series: [] };
   const opts = (map, cur) => Object.entries(map).map(([v, l]) => `<option value="${v}" ${String(cur) === v ? 'selected' : ''}>${l}</option>`).join('');
   const allCats = () => [...new Map([...catsOf('out'), ...catsOf('in')].map(x => [x.id, x])).values()];
   let n = 0;
@@ -460,11 +555,13 @@ function chartModal(existing) {
       <div class="row">
         <label class="f">Catégorie principale<select name="scat">
           <option value="">Aucune (toutes les transactions)</option>${allCats().map(o => `<option value="${o.id}" ${o.id === x.cat ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>
+        <label class="f">Montants<select name="ssense">${opts(CHART_SENSES, x.sense || 'out')}</select></label>
         <label class="f">Nom (optionnel)<input name="sname" value="${esc(x.name || '')}" placeholder="automatique"></label>
         <label class="f" style="flex:0 0 auto">Couleur<input type="color" name="scolor" value="${x.color || catColor(x.cat || x.tags?.[0]) || PALETTE[k % PALETTE.length]}" data-auto="${x.color ? '' : '1'}"></label>
         <button type="button" class="icon-btn del" data-serie-del title="Retirer cette série" style="align-self:flex-end">${ic('trash')}</button>
       </div>
       ${catChips('stags-' + k, x.tags || [], 'Étiquettes (toutes requises)')}
+      <div class="mut" style="font-size:12px">Astuce : cocher aussi la catégorie principale dans les étiquettes = transactions où elle est catégorie principale <b>ou</b> étiquette.</div>
     </div>`;
   };
   modal({
@@ -473,19 +570,20 @@ function chartModal(existing) {
     wide: true,
     body: `<div class="row"><label class="f">Titre<input name="title" value="${esc(c.title)}" placeholder="ex. Prêts et remboursements"></label>
         <label class="f">Taille<select name="span">${opts(CHART_SPANS, c.span)}</select></label></div>
-      <div class="row"><label class="f">Type de graphique<select name="type">${opts(CHART_TYPES, c.type)}</select></label>
-        <label class="f">Montants<select name="sense">${opts(CHART_SENSES, c.sense)}</select></label></div>
-      <div class="row"><label class="f">Période<select name="time">${opts(CHART_TIMES, c.time)}</select></label>
-        <label class="f" data-months>Nombre de mois<input name="months" type="number" min="1" max="120" value="${c.months || 12}"></label></div>
-      <div class="row"><label class="check"><input type="checkbox" name="values" ${c.values ? 'checked' : ''}>Afficher les valeurs</label>
+      <div class="row"><label class="f">Type<select name="type">${opts(CHART_TYPES, c.type)}</select></label>
+        <label class="f">Période<select name="time">${opts(CHART_TIMES, c.time)}</select></label>
+        <label class="f" data-months style="flex:.5">Nombre de mois<input name="months" type="number" min="1" max="120" value="${c.months || 12}"></label></div>
+      <div class="row"><label class="check" data-values><input type="checkbox" name="values" ${c.values ? 'checked' : ''}>Afficher les valeurs</label>
         <label class="check" data-cumul><input type="checkbox" name="cumul" ${c.cumul ? 'checked' : ''}>Cumulé</label></div>
-      <div class="f"><span>Séries <small class="mut">(une courbe, barre ou part par série)</small></span>
-        <div class="series" data-series>${(c.series.length ? c.series : [{ cat: '', tags: [] }]).map(serieHtml).join('')}</div>
+      <div class="f"><span>Séries <small class="mut">(une tuile, courbe, barre ou part par série — « entrées et sorties » en donne deux)</small></span>
+        <div class="series" data-series>${(c.series.length ? c.series : [{ cat: '', tags: [], sense: 'out' }]).map(serieHtml).join('')}</div>
         <button type="button" class="btn sm" data-serie-add style="align-self:flex-start">${ic('plus')}Ajouter une série</button></div>`,
     onMount: form => {
       const upd = () => {
+        const t = form.type.value;
         $('[data-months]', form).style.visibility = form.time.value === 'months' ? '' : 'hidden';
-        $('[data-cumul]', form).style.display = form.type.value === 'bar' || form.type.value === 'line' ? '' : 'none';
+        $('[data-cumul]', form).style.display = t === 'bar' || t === 'line' ? '' : 'none';
+        $('[data-values]', form).style.display = ['hbar', 'bar', 'line', 'weekday'].includes(t) ? '' : 'none';
       };
       form.time.onchange = upd; form.type.onchange = upd; upd();
       const box = $('[data-series]', form);
@@ -500,26 +598,26 @@ function chartModal(existing) {
           if (first) col.value = catColor(first);
         }
       });
-      $('[data-serie-add]', form).onclick = () => box.insertAdjacentHTML('beforeend', serieHtml({ cat: '', tags: [] }));
+      $('[data-serie-add]', form).onclick = () => box.insertAdjacentHTML('beforeend', serieHtml({ cat: '', tags: [], sense: 'out' }));
     },
     onSubmit: form => {
       const series = $$('[data-serie]', form).map(el => ({
         name: el.querySelector('[name="sname"]').value.trim(),
         cat: el.querySelector('[name="scat"]').value,
+        sense: el.querySelector('[name="ssense"]').value,
         tags: Array.from(el.querySelectorAll('.tag-pick input:checked'), i => i.value),
         color: el.querySelector('[name="scolor"]').dataset.auto ? '' : el.querySelector('[name="scolor"]').value
       }));
       if (!series.length) return 'Ajouter au moins une série.';
       if (series.some(x => !x.cat && !x.tags.length)) return 'Chaque série sans catégorie principale doit avoir au moins une étiquette.';
-      series.forEach(x => { x.tags = x.tags.filter(g => g !== x.cat); });
       const months = Math.min(120, Math.max(1, +form.months.value || 12));
       const data = {
-        title: form.title.value.trim() || 'Graphique', type: form.type.value, span: +form.span.value, sense: form.sense.value,
+        title: form.title.value.trim() || 'Graphique', type: form.type.value, span: +form.span.value,
         time: form.time.value, months, cumul: form.cumul.checked, values: form.values.checked, series
       };
       if (existing) {
-        // on retire l'ancien format (items/src) pour ne garder que le nouveau
-        delete existing.items; delete existing.src;
+        // on retire les anciens formats (items/src, sens global) pour ne garder que le nouveau
+        delete existing.items; delete existing.src; delete existing.sense;
         Object.assign(existing, data);
       } else {
         const id = 'cc-' + uid();
